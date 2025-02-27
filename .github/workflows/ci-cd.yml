@@ -44,6 +44,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}  # Or use a PAT stored in a secret
 
       - name: Docker metadata
+        id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
