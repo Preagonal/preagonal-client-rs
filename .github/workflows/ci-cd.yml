@@ -22,9 +22,14 @@ jobs:
   cd:
     needs: ci
     runs-on: [ropguy-pi]
+    env:
+      GITHUB_WORKSPACE: /home/ccerne/OpenGraal/preagonal-client
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+
+      - name: Add Cargo to PATH
+        run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Pull latest changes
         run: cd $GITHUB_WORKSPACE && git pull origin main
@@ -34,5 +39,3 @@ jobs:
       
       - name: Run service
         run: sudo systemctl restart preagonal-client.service
-    env:
-      GITHUB_WORKSPACE: /home/ccerne/OpenGraal/preagonal-client
