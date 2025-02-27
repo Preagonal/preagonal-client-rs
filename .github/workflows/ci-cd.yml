@@ -1,0 +1,38 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Check code formatting
+        run: cargo fmt -- --check
+
+      - name: Run cargo clippy
+        run: cargo clippy -- -D warnings
+
+  cd:
+    needs: ci
+    runs-on: [ropguy-pi]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Pull latest changes
+        run: cd $GITHUB_WORKSPACE && git pull origin main
+      
+      - name: Build service binary
+        run: cd $GITHUB_WORKSPACE && cargo build --release
+      
+      - name: Run service
+        run: sudo systemctl restart preagonal-client.service
+    env:
+      GITHUB_WORKSPACE: /home/ccerne/OpenGraal/preagonal-client
