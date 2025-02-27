@@ -26,6 +26,7 @@ jobs:
 
   build-and-push:
     name: Build and push Docker image
+    needs: ci
     runs-on: ubuntu-latest
     permissions:
       contents: read
