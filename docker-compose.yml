@@ -1,0 +1,13 @@
+version: '3.9'
+
+services:
+  preagonal-client:
+    image: preagonal-client
+    build:
+      dockerfile: Dockerfile
+    entrypoint: "./scripts/entrypoint.sh"
+    secrets:
+      - preagonal-client-config
+secrets:
+  preagonal-client-config:
+    file: ./config/client.toml

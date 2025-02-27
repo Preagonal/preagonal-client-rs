@@ -1,0 +1,8 @@
+# Ignore target directory
+/target
+
+# Skip the svc directory
+/svc
+
+# This file could contain sensitive information, do not check it into source control
+/config/client.toml

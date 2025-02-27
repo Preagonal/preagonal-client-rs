@@ -6,12 +6,17 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
   ci:
+    name: Check code formatting and run clippy
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Check code formatting
         run: cargo fmt -- --check
@@ -19,23 +24,34 @@ jobs:
       - name: Run cargo clippy
         run: cargo clippy -- -D warnings
 
-  cd:
-    needs: ci
-    runs-on: [ropguy-pi]
-    env:
-      GITHUB_WORKSPACE: /home/ccerne/OpenGraal/preagonal-client
+  build-and-push:
+    name: Build and push Docker image
+    runs-on: ubuntu-latest
+    permissions:
+    contents: read
+    packages: write
+    attestations: write
+    id-token: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Add Cargo to PATH
-        run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}  # Or use a PAT stored in a secret
 
-      - name: Pull latest changes
-        run: cd $GITHUB_WORKSPACE && git pull origin main
-      
-      - name: Build service binary
-        run: cd $GITHUB_WORKSPACE && cargo build --release
-      
-      - name: Run service
-        run: sudo systemctl restart preagonal-client.service
+      - name: Docker metadata
+        users: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
