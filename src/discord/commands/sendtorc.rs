@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serenity::all::{CommandInteraction, CommandOptionType, CreateCommandOption, ResolvedValue};
 use serenity::builder::CreateCommand;
 
@@ -5,7 +7,7 @@ use crate::net::packet::GPacket;
 use crate::net::packet::from_client::rc_chat::RcChat;
 
 /// Sends a message to RC.
-pub fn run(interaction: &CommandInteraction) -> Option<Box<dyn GPacket + Send>> {
+pub fn run(interaction: &CommandInteraction) -> Option<Arc<dyn GPacket + Send>> {
     // Get the user who ran the interaction
     let nick = interaction.user.name.clone();
 
@@ -20,7 +22,7 @@ pub fn run(interaction: &CommandInteraction) -> Option<Box<dyn GPacket + Send>> 
     });
 
     message
-        .map(|msg| Box::new(RcChat::new(format!("{}: {}", nick, msg))) as Box<dyn GPacket + Send>)
+        .map(|msg| Arc::new(RcChat::new(format!("{}: {}", nick, msg))) as Arc<dyn GPacket + Send>)
 }
 
 /// Registers the command.

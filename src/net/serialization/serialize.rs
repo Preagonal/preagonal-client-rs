@@ -7,7 +7,7 @@ use std::io::Cursor;
 use crate::io::io_sync::SyncGraalWriter;
 use crate::net::serialization::error::GraalSerializationError;
 
-use super::GString;
+use super::{GScript, GString};
 
 /// A serializer for serializing values into a byte vector.
 pub struct Serializer<'b> {
@@ -101,7 +101,8 @@ impl<'a, 'b> ser::Serializer for &'a mut Serializer<'b> {
     }
 
     fn serialize_u16(self, v: u16) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        self.writer.write_gu16(v as u64)?;
+        Ok(())
     }
 
     fn serialize_u32(self, v: u32) -> Result<Self::Ok, Self::Error> {
@@ -169,13 +170,29 @@ impl<'a, 'b> ser::Serializer for &'a mut Serializer<'b> {
     where
         T: ?Sized + Serialize,
     {
+        // TODO(@ropguy): The following unsafe cast is used to extract a GString.
+        // It would be preferable to replace this with a safer method
+        // (e.g. via a custom trait or explicit implementation for GString).
         match name {
             "GString" => {
-                // TODO(@ropguy): The following unsafe cast is used to extract a GString.
-                // It would be preferable to replace this with a safer method
-                // (e.g. via a custom trait or explicit implementation for GString).
                 let gstring: &GString = unsafe { &*(value as *const T as *const GString) };
                 self.writer.write_gstring(&gstring.0)?;
+                Ok(())
+            }
+            "GScript" => {
+                let gscript: &GScript = unsafe { &*(value as *const T as *const GScript) };
+
+                // Replace \r with "" and \n with "\xa7"
+                let mut script: Vec<u8> = gscript.0.as_bytes().to_vec();
+                for i in 0..script.len() {
+                    if script[i] == b'\r' {
+                        script[i] = b' ';
+                    } else if script[i] == b'\n' {
+                        script[i] = 0xa7;
+                    }
+                }
+                self.writer.write_bytes(&script)?;
+
                 Ok(())
             }
             _ => todo!(),

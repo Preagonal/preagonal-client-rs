@@ -1,5 +1,13 @@
 #![deny(missing_docs)]
 
+/// NC Login packet.
+pub mod nc_login;
+/// NC query packet.
+pub mod nc_query;
+/// NC Add weapon
+pub mod nc_weapon_add;
+/// NC weapon get packet.
+pub mod nc_weapon_get;
 /// RC Chat packet.
 pub mod rc_chat;
 /// RC Login packet.
@@ -12,7 +20,8 @@ define_packets! {
         LevelWarp = 0x0,
         BoardModify = 0x1,
         PlayerProps = 0x2,
-        NpcProps = 0x3,
+        // TODO: This could be NpcProps
+        NcLogin = 0x3,
         BombAdd = 0x4,
         Login = 0x5,
         RcLogin = 0x6,

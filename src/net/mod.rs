@@ -8,3 +8,6 @@ pub mod protocol;
 
 /// This module contains the serialization / deserialization logic
 pub mod serialization;
+
+/// This module contains the client logic.
+pub mod client;

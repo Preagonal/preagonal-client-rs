@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
 
 use from_client::FromClientPacketId;
 use from_server::FromServerPacketId;
@@ -18,6 +18,13 @@ pub trait GPacket: std::fmt::Debug + Send + Sync {
     fn id(&self) -> PacketId;
     /// Get the data of the packet.
     fn data(&self) -> Vec<u8>;
+}
+
+/// A single PacketEvent, used for communication between tokio tasks.
+#[derive(Debug, Clone)]
+pub struct PacketEvent {
+    /// The packet being sent / received.
+    pub packet: Arc<dyn GPacket>,
 }
 
 /// Struct representing an unstructured GPacket
@@ -67,8 +74,8 @@ impl GPacketBuilder {
     }
 
     /// Build the packet.
-    pub fn build(self) -> Box<dyn GPacket> {
-        Box::new(GPacketImpl {
+    pub fn build(self) -> Arc<dyn GPacket> {
+        Arc::new(GPacketImpl {
             id: self.id,
             data: self.data,
         })

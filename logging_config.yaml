@@ -5,7 +5,7 @@ appenders:
       pattern: "{h({d(%Y-%m-%d %H:%M:%S)(utc)} - {l}: {m}{n})}"
 loggers:
   preagonal_client_rs:
-    level: info
+    level: debug
     appenders:
       - console
     additive: false

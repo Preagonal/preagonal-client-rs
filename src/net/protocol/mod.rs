@@ -1,5 +1,8 @@
 #![deny(missing_docs)]
 
+use std::sync::Arc;
+
+use proto_v4::GProtocolV4;
 use proto_v5::GProtocolV5;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -8,6 +11,8 @@ use crate::io::GraalIoError;
 
 use super::packet::{GPacket, PacketConversionError};
 
+/// Module containing the v4 protocol implementation.
+pub mod proto_v4;
 /// Module containing the v5 protocol implementation.
 pub mod proto_v5;
 
@@ -44,7 +49,7 @@ pub trait Protocol {
     /// Read the next packet from the protocol.
     fn read(
         &mut self,
-    ) -> impl std::future::Future<Output = Result<Box<dyn GPacket>, ProtocolError>> + Send;
+    ) -> impl std::future::Future<Output = Result<Arc<dyn GPacket>, ProtocolError>> + Send;
     /// Write a packet to the protocol.
     fn write(
         &mut self,
@@ -56,16 +61,17 @@ pub trait Protocol {
 
 /// Enum representing the protocol version.
 pub enum GProtocolEnum<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> {
+    /// The v4 protocol.
+    V4(GProtocolV4<R, W>),
     /// The v5 protocol.
     V5(GProtocolV5<R, W>),
-    // V4(GProtocolV4<R, W>),
     // V6(GProtocolV6<R, W>),
 }
 
 impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GProtocolEnum<R, W> {
-    async fn read(&mut self) -> Result<Box<dyn GPacket>, ProtocolError> {
+    async fn read(&mut self) -> Result<Arc<dyn GPacket>, ProtocolError> {
         match self {
-            // GProtocolEnum::V4(proto) => proto.read(),
+            GProtocolEnum::V4(proto) => proto.read().await,
             GProtocolEnum::V5(proto) => proto.read().await,
             // GProtocolEnum::V6(proto) => proto.read(),
         }
@@ -73,7 +79,7 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GPr
 
     async fn write(&mut self, packet: &(dyn GPacket + Send)) -> Result<(), ProtocolError> {
         match self {
-            // GProtocolEnum::V4(proto) => proto.write(packet),
+            GProtocolEnum::V4(proto) => proto.write(packet).await,
             GProtocolEnum::V5(proto) => proto.write(packet).await,
             // GProtocolEnum::V6(proto) => proto.write(packet),
         }
@@ -81,7 +87,7 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GPr
 
     fn version(&self) -> u8 {
         match self {
-            // GProtocolEnum::V4(proto) => proto.version(),
+            GProtocolEnum::V4(proto) => proto.version(),
             GProtocolEnum::V5(proto) => proto.version(),
             // GProtocolEnum::V6(proto) => proto.version(),
         }

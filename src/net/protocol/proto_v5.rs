@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use std::collections::VecDeque;
+use std::{collections::VecDeque, sync::Arc};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -56,7 +56,7 @@ pub struct GProtocolV5<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send
     writer: AsyncGraalWriter<W>,
     encryption_out_state: u32,
     encryption_in_state: u32,
-    packet_queue: VecDeque<Box<dyn GPacket>>,
+    packet_queue: VecDeque<Arc<dyn GPacket>>,
     encryption_key: Option<u8>,
 }
 
@@ -157,20 +157,18 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV5<R, W
         // Decompress according to the compression type.
         let decompressed_packet = match compression_type {
             GCompressionTypeV5::CompressionNone => decrypted_packet,
-            GCompressionTypeV5::CompressionZlib => match decompress_zlib(&decrypted_packet) {
-                Ok(data) => data,
-                Err(e) => {
+            GCompressionTypeV5::CompressionZlib => {
+                decompress_zlib(&decrypted_packet).map_err(|e| {
                     log::error!("Zlib decompression error: {:?}", e);
-                    decrypted_packet
-                }
-            },
-            GCompressionTypeV5::CompressionBzip2 => match decompress_bzip2(&decrypted_packet) {
-                Ok(data) => data,
-                Err(e) => {
+                    ProtocolError::Io(e.into())
+                })?
+            }
+            GCompressionTypeV5::CompressionBzip2 => {
+                decompress_bzip2(&decrypted_packet).map_err(|e| {
                     log::error!("Bzip2 decompression error: {:?}", e);
-                    decrypted_packet
-                }
-            },
+                    ProtocolError::Io(e.into())
+                })?
+            }
         };
 
         // Wrap decompressed_packet in a cursor.
@@ -243,7 +241,7 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV5<R, W
 }
 
 impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GProtocolV5<R, W> {
-    async fn read(&mut self) -> Result<Box<dyn GPacket>, ProtocolError> {
+    async fn read(&mut self) -> Result<Arc<dyn GPacket>, ProtocolError> {
         if self.packet_queue.is_empty() {
             self.read_from_stream().await?;
         }
