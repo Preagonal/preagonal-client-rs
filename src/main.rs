@@ -186,12 +186,11 @@ async fn main() {
             let protocol = GProtocolV5::new(reader, writer);
             let encryption_key: u8 = rand::random::<u8>() & 0x7f;
             let login_packet = RcLogin::new(
-                encryption_key as u32,
+                encryption_key,
                 login.version,
                 login.auth.account_name,
                 login.auth.password,
-                login.platform,
-                login.system_ids,
+                login.identification,
             );
 
             // Wrap the protocol in an Arc<Mutex<_>> so it can be shared safely.

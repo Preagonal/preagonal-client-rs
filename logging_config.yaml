@@ -3,7 +3,13 @@ appenders:
     kind: console
     encoder:
       pattern: "{h({d(%Y-%m-%d %H:%M:%S)(utc)} - {l}: {m}{n})}"
+loggers:
+  preagonal_client_rs:
+    level: info
+    appenders:
+      - console
+    additive: false
 root:
-  level: debug
+  level: warn
   appenders:
     - console

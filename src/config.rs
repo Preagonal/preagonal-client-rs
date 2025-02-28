@@ -22,11 +22,9 @@ pub struct LoginConfig {
     pub nick: Option<String>,
     /// The version to use
     pub version: String,
-    /// The account name to use
-    pub platform: String,
     #[serde(default)]
     /// The system ids to use
-    pub system_ids: Vec<String>,
+    pub identification: Vec<String>,
     /// The auth to use
     pub auth: LoginAuth,
 }

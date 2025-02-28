@@ -11,14 +11,10 @@ nick = "[CHANGEME]"
 # The version used in the login packet
 version = "GSERV025"
 
-# The platform for the joining client
-platform = "win"
-
-# Three identifiers, which are used to identify the user's client, for security
-# purposes. The RC client actually uses three such identifiers, and I believe the
-# format is usually 3 16-byte values formatted as ASCII hex. The format is basically
-# the same as MD5 hashes.
-system_ids = ["[CHANGEME]", "[CHANGEME]", "[CHANGEME]"]
+# These are IDs used to identify the user's client, for security purposes. The RC client
+# actually uses three such identifiers, and I believe the format is usually 3 16-byte
+# values formatted as ASCII hex. The format is basically the same as MD5 hashes.
+identification = ["win", "[CHANGEME]", "[CHANGEME]", "[CHANGEME]"]
 
 # The account username (e.g. Graal123456)
 auth.account_name = "[CHANGEME]"

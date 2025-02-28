@@ -1,11 +1,16 @@
 #![deny(missing_docs)]
 
-use crate::net::packet::{GPacket, PacketId};
+use serde::Serialize;
+
+use crate::net::{
+    packet::{GPacket, PacketId},
+    serialization::serialize::serialize_to_vector,
+};
 
 use super::FromClientPacketId;
 
 /// RcChat packet.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct RcChat {
     /// Message
     pub message: String,
@@ -13,13 +18,13 @@ pub struct RcChat {
 
 impl RcChat {
     /// Create a new RcChat packet.
-    pub fn new(message: String) -> Self {
-        Self { message }
-    }
-
-    fn serialize(&self) -> Vec<u8> {
-        // Simply turn the message into a byte vector.
-        self.message.as_bytes().to_vec()
+    pub fn new<S>(message: S) -> Self
+    where
+        S: Into<String>,
+    {
+        Self {
+            message: message.into(),
+        }
     }
 }
 
@@ -29,6 +34,6 @@ impl GPacket for RcChat {
     }
 
     fn data(&self) -> Vec<u8> {
-        self.serialize()
+        serialize_to_vector(self).expect("Failed to serialize RcChat packet")
     }
 }

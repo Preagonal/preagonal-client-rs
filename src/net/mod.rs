@@ -5,3 +5,6 @@ pub mod packet;
 
 /// This module contains the protocol definitions and implementations.
 pub mod protocol;
+
+/// This module contains the serialization / deserialization logic
+pub mod serialization;
