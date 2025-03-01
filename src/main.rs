@@ -93,7 +93,7 @@ impl EventHandler for Handler {
             .register_event_handler(
                 PacketId::FromServer(FromServerPacketId::RcChat),
                 move |event| {
-                    let channel_id = channel_id.clone();
+                    let channel_id = channel_id;
                     let http = http.clone();
                     async move {
                         let chat_message = event

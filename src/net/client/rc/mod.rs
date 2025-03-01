@@ -42,6 +42,8 @@ pub struct NpcControl {
     shutdown: Arc<Notify>,
 }
 
+type PendingRequests = Arc<Mutex<HashMap<PacketId, oneshot::Sender<Arc<dyn GPacket>>>>>;
+
 /// RemoteControl is a high-level client for communicating with the RC server,
 /// and (optionally) automatically managing an NPC connection.
 pub struct RemoteControl {
@@ -50,7 +52,7 @@ pub struct RemoteControl {
     /// Channel for sending outgoing RC packets.
     rc_outgoing_tx: mpsc::Sender<Arc<dyn GPacket + Send>>,
     /// Mapping from expected packet type (PacketId) to pending response channels.
-    pending_requests: Arc<Mutex<HashMap<PacketId, oneshot::Sender<Arc<dyn GPacket>>>>>,
+    pending_requests: PendingRequests,
     /// Mapping from PacketId to registered event handlers.
     event_handlers: Arc<Mutex<HashMap<PacketId, Vec<Arc<EventHandlerFn>>>>>,
     /// Client configuration.
@@ -133,7 +135,7 @@ impl RemoteControl {
     /// Spawns a task that continuously reads packets from the protocol.
     fn spawn_read_loop(
         protocol: Arc<Mutex<GProtocolEnum<BufReader<OwnedReadHalf>, OwnedWriteHalf>>>,
-        pending_requests: Arc<Mutex<HashMap<PacketId, oneshot::Sender<Arc<dyn GPacket>>>>>,
+        pending_requests: PendingRequests,
         event_handlers: Arc<Mutex<HashMap<PacketId, Vec<Arc<EventHandlerFn>>>>>,
         shutdown: Arc<Notify>,
     ) {
@@ -280,7 +282,7 @@ impl RemoteControl {
         data.remove(0);
         let parts: Vec<&str> = data.split(',').collect();
         let npc_host = parts
-            .get(0)
+            .first()
             .ok_or_else(|| ClientError::Other("Missing NPC host".into()))?;
         let npc_port = parts
             .get(1)
@@ -343,7 +345,7 @@ impl RemoteControl {
             tokio::spawn(async move {
                 nc_shutdown.notified().await;
                 let mut lock = npc_control_handle.lock().await;
-                if let Some(_) = lock.as_ref() {
+                if lock.as_ref().is_some() {
                     *lock = None;
                 }
             });

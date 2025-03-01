@@ -160,13 +160,13 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV5<R, W
             GCompressionTypeV5::CompressionZlib => {
                 decompress_zlib(&decrypted_packet).map_err(|e| {
                     log::error!("Zlib decompression error: {:?}", e);
-                    ProtocolError::Io(e.into())
+                    ProtocolError::Io(e)
                 })?
             }
             GCompressionTypeV5::CompressionBzip2 => {
                 decompress_bzip2(&decrypted_packet).map_err(|e| {
                     log::error!("Bzip2 decompression error: {:?}", e);
-                    ProtocolError::Io(e.into())
+                    ProtocolError::Io(e)
                 })?
             }
         };

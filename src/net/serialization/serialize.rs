@@ -184,11 +184,11 @@ impl<'a, 'b> ser::Serializer for &'a mut Serializer<'b> {
 
                 // Replace \r with "" and \n with "\xa7"
                 let mut script: Vec<u8> = gscript.0.as_bytes().to_vec();
-                for i in 0..script.len() {
-                    if script[i] == b'\r' {
-                        script[i] = b' ';
-                    } else if script[i] == b'\n' {
-                        script[i] = 0xa7;
+                for i in &mut script {
+                    if *i == b'\r' {
+                        *i = b' ';
+                    } else if *i == b'\n' {
+                        *i = 0xa7;
                     }
                 }
                 self.writer.write_bytes(&script)?;
