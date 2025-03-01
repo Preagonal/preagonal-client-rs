@@ -1,14 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
-use config::LoginConfig;
 use discord::commands::sendtorc;
 use net::{
-    client::{
-        nc::{NpcControl, config::NcConfig},
-        rc::{
-            RemoteControl,
-            config::{RcConfig, RcLoginConfig},
-        },
+    client::rc::{
+        RemoteControl,
+        config::{RcConfig, RcLoginConfig},
     },
     packet::{PacketId, from_server::FromServerPacketId},
 };
@@ -55,7 +51,7 @@ impl EventHandler for Handler {
 
             if let Some(packet) = content {
                 self.rc
-                    .send_packet(packet)
+                    .send_rc_packet(packet)
                     .await
                     .expect("Error sending packet");
 
@@ -65,12 +61,12 @@ impl EventHandler for Handler {
                 );
 
                 if let Err(why) = command.create_response(&ctx.http, response).await {
-                    log::error!("Error responding to command: {:?}", why);
+                    log::error!("Error responding to Discrord command: {:?}", why);
                 }
                 return;
             }
 
-            log::warn!("Unknown command: {}", command.data.name);
+            log::warn!("Unknown Discord command received: {}", command.data.name);
         }
     }
 
@@ -83,9 +79,9 @@ impl EventHandler for Handler {
             .set_commands(&ctx.http, vec![sendtorc::register()])
             .await
         {
-            log::error!("Error setting commands: {:?}", why);
+            log::error!("Error setting Discord commands: {:?}", why);
         } else {
-            log::info!("Successfully set commands");
+            log::info!("Successfully set Discord commands");
         }
 
         // Capture needed fields to avoid lifetime issues.
@@ -96,7 +92,7 @@ impl EventHandler for Handler {
         self.rc
             .register_event_handler(
                 PacketId::FromServer(FromServerPacketId::RcChat),
-                move |_, event| {
+                move |event| {
                     let channel_id = channel_id.clone();
                     let http = http.clone();
                     async move {
@@ -152,7 +148,8 @@ async fn main() {
                     password: login.auth.password,
                     identification: login.identification,
                 },
-                timeout: Duration::from_secs(15),
+                timeout: Duration::from_secs(5),
+                nc_auto_disconnect: Duration::from_secs(60 * 5),
             };
 
             // Create RemoteControl with provided configuration.
@@ -160,65 +157,7 @@ async fn main() {
                 .await
                 .expect("Error connecting to RemoteControl");
 
-            async fn handle_signature_event(rc: Arc<RemoteControl>, login: LoginConfig) {
-                // Signature tells us that we're connected to the server.
-                log::info!("Connected to the RC server.");
-
-                // Now connect to the NPC server.
-                let npc_server_address = rc.query_nc_addr().await;
-
-                // unwrap npc_server_address
-                let npc_server_address =
-                    npc_server_address.expect("Error querying NPC server address");
-
-                // TODO: This jank formatting will go away once we implement deserialization for packets.
-                let mut data = npc_server_address
-                    .data()
-                    .iter()
-                    .map(|&byte| byte as char)
-                    .collect::<String>();
-                data.remove(0);
-                data.remove(0);
-                let data: Vec<&str> = data.split(',').collect();
-                let npc_host = data[0];
-                let npc_port = data[1].parse::<u16>().expect("Error parsing port");
-
-                // Connect to the NPC server.
-                let nc_config = NcConfig {
-                    host: npc_host.to_string(),
-                    port: npc_port,
-                    login: net::client::nc::config::NcLoginConfig {
-                        username: login.auth.account_name.clone(),
-                        password: login.auth.password.clone(),
-                        identification: login.identification.clone(),
-                    },
-                    timeout: Duration::from_secs(15),
-                };
-
-                let nc = NpcControl::connect(nc_config)
-                    .await
-                    .expect("Error connecting to NpcControl");
-
-                nc.login().await.expect("Error logging in");
-
-                // Attempt to get weapon
-                let weapon = nc
-                    .add_weapon(
-                        "test".to_string(),
-                        "bcalarmclock.png".to_string(),
-                        "function onCreated() {\n    echo(\"hi\");\n}".to_string(),
-                    )
-                    .await;
-                log::info!("Weapon: {:?}", weapon);
-            }
-
-            rc.register_event_handler(
-                PacketId::FromServer(FromServerPacketId::Signature),
-                move |rc, _| Box::pin(handle_signature_event(rc, server.login.clone())),
-            )
-            .await;
-
-            rc.login().await.expect("Error logging in");
+            rc.rc_login().await.expect("Error logging in");
 
             // == Discord ==
             let guild_id = server.discord.server_id;
@@ -242,6 +181,12 @@ async fn main() {
             tokio::spawn(async move {
                 client.start().await.expect("Error running Discord client");
             });
+
+            let wep = rc
+                .nc_get_weapon("test".to_string())
+                .await
+                .expect("Error getting weapon");
+            log::info!("Weapon: {:?}", wep);
 
             rc.wait_shutdown().await;
         });

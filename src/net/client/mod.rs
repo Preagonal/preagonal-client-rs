@@ -7,8 +7,6 @@ use tokio::sync::mpsc::error::SendError;
 
 use crate::net::{packet::GPacket, protocol::ProtocolError};
 
-/// This module defines the NpcControl client.
-pub mod nc;
 /// This module defines the RemoteControl client.
 pub mod rc;
 
@@ -34,4 +32,8 @@ pub enum ClientError {
     /// If a TCP error is encountered.
     #[error("TCP error: {0}")]
     Tcp(#[from] std::io::Error),
+
+    /// Other
+    #[error("Other error: {0}")]
+    Other(String),
 }

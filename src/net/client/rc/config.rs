@@ -10,8 +10,10 @@ pub struct RcConfig {
     pub port: u16,
     /// The login configuration.
     pub login: RcLoginConfig,
-    /// The timeout for the connection.
+    /// The timeout for events that have a response.
     pub timeout: Duration,
+    /// When we should automatically disconnect the NpcControl.
+    pub nc_auto_disconnect: Duration,
 }
 
 /// A struct that contains the RcLoginConfig
