@@ -1,8 +1,11 @@
 #![deny(missing_docs)]
 
-use std::{collections::VecDeque, sync::Arc};
-
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex as StdMutex, OnceLock},
+};
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::Mutex; // async mutex
 
 use crate::{
     io::{
@@ -36,7 +39,6 @@ impl From<GCompressionTypeV5> for u8 {
     }
 }
 
-// Implement `TryFrom<u8>` for the enum.
 impl TryFrom<u8> for GCompressionTypeV5 {
     type Error = ProtocolError;
 
@@ -50,29 +52,36 @@ impl TryFrom<u8> for GCompressionTypeV5 {
     }
 }
 
-/// Struct representing the v5 protocol.
+/// Struct representing the v5 protocol, refactored with internal mutexes.
 pub struct GProtocolV5<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> {
-    reader: AsyncGraalReader<R>,
-    writer: AsyncGraalWriter<W>,
-    encryption_out_state: u32,
-    encryption_in_state: u32,
-    packet_queue: VecDeque<Arc<dyn GPacket>>,
-    encryption_key: Option<u8>,
+    /// The read half, protected by its own async Mutex.
+    reader: Mutex<AsyncGraalReader<R>>,
+    /// The write half, protected by its own async Mutex.
+    writer: Mutex<AsyncGraalWriter<W>>,
+    /// Encryption state for outgoing data. (Standard mutex is OK here as updates are fast.)
+    encryption_out_state: StdMutex<u32>,
+    /// Encryption state for incoming data.
+    encryption_in_state: StdMutex<u32>,
+    /// A queue of parsed packets.
+    packet_queue: Mutex<VecDeque<Arc<dyn GPacket>>>,
+    /// Optional encryption key.
+    pub encryption_key: OnceLock<u8>,
 }
 
 impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV5<R, W> {
     /// Create a new v5 protocol.
     pub fn new(reader: R, writer: W) -> Self {
         Self {
-            reader: AsyncGraalReader::from_reader(reader),
-            writer: AsyncGraalWriter::from_writer(writer),
-            encryption_out_state: V5_ENCRYPTION_START,
-            encryption_in_state: V5_ENCRYPTION_START,
-            packet_queue: VecDeque::new(),
-            encryption_key: None,
+            reader: Mutex::new(AsyncGraalReader::from_reader(reader)),
+            writer: Mutex::new(AsyncGraalWriter::from_writer(writer)),
+            encryption_out_state: StdMutex::new(V5_ENCRYPTION_START),
+            encryption_in_state: StdMutex::new(V5_ENCRYPTION_START),
+            packet_queue: Mutex::new(VecDeque::new()),
+            encryption_key: OnceLock::new(),
         }
     }
 
+    /// Get the iteration limit for processing based on the compression type.
     fn get_iterator_limit(&self, compression_type: GCompressionTypeV5) -> u32 {
         match compression_type {
             GCompressionTypeV5::CompressionNone => 0xc, // 12 in hex.
@@ -81,21 +90,26 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV5<R, W
     }
 
     /// Set the encryption key.
-    pub fn set_encryption_key(&mut self, key: u8) {
-        self.encryption_key = Some(key);
+    pub fn set_encryption_key(&self, key: u8) -> Result<(), ProtocolError> {
+        self.encryption_key
+            .set(key)
+            .map_err(|_| ProtocolError::Other("Encryption key already set".to_string()))
     }
 
-    /// Process a buffer (for encryption or decryption).
+    /// Process a buffer for encryption or decryption.
     /// If `is_outgoing` is true, update the out-state; otherwise update the in-state.
     fn process(
-        &mut self,
+        &self,
         compression_type: GCompressionTypeV5,
         is_outgoing: bool,
         buf: &[u8],
     ) -> Vec<u8> {
-        if self.encryption_key.is_none() {
-            return buf.to_vec();
-        }
+        // If the encryption key isn’t set, just return a copy of the buffer.
+        let key = match self.encryption_key.get() {
+            Some(&k) => k,
+            None => return buf.to_vec(),
+        };
+
         let mut new_buf = buf.to_vec();
         let mut limit = self.get_iterator_limit(compression_type);
 
@@ -105,24 +119,20 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV5<R, W
                     break;
                 }
                 limit -= 1;
-                if let Some(key) = self.encryption_key {
-                    if is_outgoing {
-                        self.encryption_out_state = self
-                            .encryption_out_state
-                            .wrapping_mul(0x8088405)
-                            .wrapping_add(key as u32);
-                    } else {
-                        self.encryption_in_state = self
-                            .encryption_in_state
-                            .wrapping_mul(0x8088405)
-                            .wrapping_add(key as u32);
-                    }
+                // Update the encryption state.
+                if is_outgoing {
+                    let mut out_state = self.encryption_out_state.lock().unwrap();
+                    *out_state = out_state.wrapping_mul(0x8088405).wrapping_add(key as u32);
+                } else {
+                    let mut in_state = self.encryption_in_state.lock().unwrap();
+                    *in_state = in_state.wrapping_mul(0x8088405).wrapping_add(key as u32);
                 }
             }
+            // Get the current state for this iteration.
             let state = if is_outgoing {
-                self.encryption_out_state
+                *self.encryption_out_state.lock().unwrap()
             } else {
-                self.encryption_in_state
+                *self.encryption_in_state.lock().unwrap()
             };
             let shift = ((i % 4) * 8) as u32;
             let mask = (state >> shift) as u8;
@@ -132,21 +142,23 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV5<R, W
     }
 
     /// Encrypt a buffer.
-    fn encrypt(&mut self, buf: &[u8], compression: GCompressionTypeV5) -> Vec<u8> {
+    fn encrypt(&self, buf: &[u8], compression: GCompressionTypeV5) -> Vec<u8> {
         self.process(compression, true, buf)
     }
 
     /// Decrypt a buffer.
-    fn decrypt(&mut self, buf: &[u8], compression: GCompressionTypeV5) -> Vec<u8> {
+    fn decrypt(&self, buf: &[u8], compression: GCompressionTypeV5) -> Vec<u8> {
         self.process(compression, false, buf)
     }
 
-    /// Read raw packet data from the input stream,
-    /// decrypt, decompress, and parse it into one or more GPacket(s).
-    pub async fn read_from_stream(&mut self) -> Result<(), ProtocolError> {
-        // Read the first 2 bytes (packet length).
-        let len = self.reader.read_u16().await?;
-        let packet_data = self.reader.read_exact(len.into()).await?;
+    /// Read raw packet data from the input stream, decrypt, decompress,
+    /// and parse it into one or more `GPacket`s.
+    pub async fn read_from_stream(&self) -> Result<(), ProtocolError> {
+        // Lock the reader only for the I/O portion.
+        let mut reader = self.reader.lock().await;
+        let len = reader.read_u16().await?;
+        let packet_data = reader.read_exact(len.into()).await?;
+        drop(reader); // Release the reader lock early.
 
         // The first byte indicates the compression type.
         let compression_type = GCompressionTypeV5::try_from(packet_data[0])?;
@@ -154,7 +166,7 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV5<R, W
         // Decrypt the remaining bytes.
         let decrypted_packet = self.decrypt(&packet_data[1..], compression_type);
 
-        // Decompress according to the compression type.
+        // Decompress based on the compression type.
         let decompressed_packet = match compression_type {
             GCompressionTypeV5::CompressionNone => decrypted_packet,
             GCompressionTypeV5::CompressionZlib => {
@@ -171,27 +183,28 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV5<R, W
             }
         };
 
-        // Wrap decompressed_packet in a cursor.
+        // Wrap decompressed_packet in a synchronous reader.
         let mut pack_data = decompressed_packet.into_sync_graal_reader();
 
+        // Lock the packet queue for updating.
+        let mut queue = self.packet_queue.lock().await;
         while pack_data.can_read()? {
             let packet_type = pack_data.read_gu8()?;
-            // Read until newline.
-            let payload: Vec<u8> = pack_data.read_until(0xa)?;
+            // Read until newline (0x0A).
+            let payload: Vec<u8> = pack_data.read_until(0xA)?;
             let packet = GPacketBuilder::new(PacketId::FromServer(FromServerPacketId::try_from(
                 packet_type,
             )?))
             .with_data(payload)
             .build();
 
-            self.packet_queue.push_back(packet);
+            queue.push_back(packet);
         }
-
         Ok(())
     }
 
     /// Compress and encrypt data before sending.
-    fn prepare_send(&mut self, data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+    fn prepare_send(&self, data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
         // Compress the payload using zlib.
         let compressed_payload = compress_zlib(data)?;
         // Encrypt the compressed payload.
@@ -200,11 +213,8 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV5<R, W
 
     /// Send a packet by writing its data (with header, compression, and encryption)
     /// to the output stream.
-    pub async fn send_packet(
-        &mut self,
-        packet: &(dyn GPacket + Send),
-    ) -> Result<(), ProtocolError> {
-        // Create new GraalReader with a new buffer.
+    pub async fn send_packet(&self, packet: &(dyn GPacket + Send)) -> Result<(), ProtocolError> {
+        // Build the packet payload.
         let mut vec = Vec::new();
         {
             let mut payload_stream = vec.into_sync_graal_writer();
@@ -214,43 +224,45 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV5<R, W
             payload_stream.flush()?;
         }
 
-        // get all the bytes from the buffer.
         let prepared_buffer = self.prepare_send(&vec)?;
 
-        let length: u16 = if self.encryption_key.is_some() {
-            (prepared_buffer.len() + 1) as u16
-        } else {
-            prepared_buffer.len() as u16
+        let length: u16 = match self.encryption_key.get() {
+            Some(_) => (prepared_buffer.len() + 1) as u16, // +1 for compression type byte
+            None => prepared_buffer.len() as u16,
         };
 
         let mut send_vec = Vec::new();
         {
             let mut send_stream = send_vec.into_sync_graal_writer();
             send_stream.write_u16(length)?;
-            if self.encryption_key.is_some() {
+            if self.encryption_key.get().is_some() {
                 send_stream.write_u8(GCompressionTypeV5::CompressionZlib.into())?;
             }
             send_stream.write_bytes(&prepared_buffer)?;
             send_stream.flush()?;
         }
 
-        self.writer.write_bytes(&send_vec).await?;
-        self.writer.flush().await?;
+        let mut writer = self.writer.lock().await;
+        writer.write_bytes(&send_vec).await?;
+        writer.flush().await?;
         Ok(())
     }
 }
 
 impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GProtocolV5<R, W> {
-    async fn read(&mut self) -> Result<Arc<dyn GPacket>, ProtocolError> {
-        if self.packet_queue.is_empty() {
-            self.read_from_stream().await?;
+    async fn read(&self) -> Result<Arc<dyn GPacket>, ProtocolError> {
+        {
+            let queue = self.packet_queue.lock().await;
+            if queue.is_empty() {
+                drop(queue);
+                self.read_from_stream().await?;
+            }
         }
-        self.packet_queue
-            .pop_front()
-            .ok_or(ProtocolError::EmptyPacketQueue)
+        let mut queue = self.packet_queue.lock().await;
+        queue.pop_front().ok_or(ProtocolError::EmptyPacketQueue)
     }
 
-    async fn write(&mut self, packet: &(dyn GPacket + Send)) -> Result<(), ProtocolError> {
+    async fn write(&self, packet: &(dyn GPacket + Send)) -> Result<(), ProtocolError> {
         self.send_packet(packet).await
     }
 

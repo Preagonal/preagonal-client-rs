@@ -2,15 +2,16 @@
 
 use std::{collections::VecDeque, sync::Arc};
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::Mutex;
 
+use crate::io::io_vec::InMemoryGraalReaderExt;
 use crate::{
     io::{
         io_async::{AsyncGraalReader, AsyncGraalWriter},
-        io_vec::{InMemoryGraalReaderExt, IntoSyncGraalReaderRef, IntoSyncGraalWriterRef},
+        io_vec::{IntoSyncGraalReaderRef, IntoSyncGraalWriterRef},
     },
     net::packet::{GPacket, GPacketBuilder, PacketId, from_server::FromServerPacketId},
     utils::{compress_zlib, decompress_zlib},
-    // Assume Protocol and ProtocolError are defined in your crate.
 };
 
 use super::{Protocol, ProtocolError};
@@ -19,29 +20,37 @@ use super::{Protocol, ProtocolError};
 /// (This is the same value as used in v5.)
 pub const V4_ENCRYPTION_START: u32 = 0x4A80B38;
 
-/// Struct representing the v4 protocol.
+/// Struct representing the v4 protocol, now with separate locks for reading, writing,
+/// and for the packet queue.
 pub struct GProtocolV4<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> {
-    reader: AsyncGraalReader<R>,
-    writer: AsyncGraalWriter<W>,
-    packet_queue: VecDeque<Arc<dyn GPacket>>,
+    /// Reader is guarded by its own mutex.
+    reader: Mutex<AsyncGraalReader<R>>,
+    /// Writer is guarded by its own mutex.
+    writer: Mutex<AsyncGraalWriter<W>>,
+    /// Packet queue, filled by the read loop.
+    packet_queue: Mutex<VecDeque<Arc<dyn GPacket>>>,
 }
 
 impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV4<R, W> {
     /// Create a new v4 protocol.
     pub fn new(reader: R, writer: W) -> Self {
         Self {
-            reader: AsyncGraalReader::from_reader(reader),
-            writer: AsyncGraalWriter::from_writer(writer),
-            packet_queue: VecDeque::new(),
+            reader: Mutex::new(AsyncGraalReader::from_reader(reader)),
+            writer: Mutex::new(AsyncGraalWriter::from_writer(writer)),
+            packet_queue: Mutex::new(VecDeque::new()),
         }
     }
 
-    /// Read raw packet data from the input stream,
-    /// decompress it using zlib, and parse it into one or more `GPacket`s.
-    pub async fn read_from_stream(&mut self) -> Result<(), ProtocolError> {
+    /// Read raw packet data from the input stream, decompress it using zlib,
+    /// and parse it into one or more `GPacket`s.
+    pub async fn read_from_stream(&self) -> Result<(), ProtocolError> {
+        // Acquire the reader lock.
+        let mut reader = self.reader.lock().await;
         // Read the first 2 bytes (packet length).
-        let len = self.reader.read_u16().await?;
-        let packet_data = self.reader.read_exact(len.into()).await?;
+        let len = reader.read_u16().await?;
+        let packet_data = reader.read_exact(len.into()).await?;
+        // Release the reader lock as early as possible.
+        drop(reader);
 
         // Decompress the packet data using zlib.
         let decompressed_packet = decompress_zlib(&packet_data).map_err(|e| {
@@ -51,7 +60,8 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV4<R, W
 
         // Wrap the decompressed packet data in a synchronous reader.
         let mut pack_data = decompressed_packet.into_sync_graal_reader();
-
+        // Lock the packet queue for writing.
+        let mut queue = self.packet_queue.lock().await;
         while pack_data.can_read()? {
             // Read a packet: first byte is the packet type.
             let packet_type = pack_data.read_gu8()?;
@@ -63,22 +73,22 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV4<R, W
             .with_data(payload)
             .build();
 
-            self.packet_queue.push_back(packet);
+            queue.push_back(packet);
         }
         Ok(())
     }
 
-    /// Compress and encrypt data before sending.
-    fn prepare_send(&mut self, data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+    /// Compress (and encrypt if needed) data before sending.
+    fn prepare_send(&self, data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
         // Compress the payload using zlib.
         let compressed_payload = compress_zlib(data)?;
-        // Encrypt the compressed payload (removing one byte).
+        // Here you can apply encryption if needed.
         Ok(compressed_payload)
     }
 
     /// Send a packet by writing its data (with header, compression, and encryption)
     /// to the output stream.
-    pub async fn send_packet(&mut self, packet: &dyn GPacket) -> Result<(), ProtocolError> {
+    pub async fn send_packet(&self, packet: &dyn GPacket) -> Result<(), ProtocolError> {
         // Build the packet payload: packet type followed by data and a newline.
         let mut vec = Vec::new();
         {
@@ -101,26 +111,34 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV4<R, W
             send_stream.flush()?;
         }
 
-        self.writer.write_bytes(&send_vec).await?;
-        self.writer.flush().await?;
+        // Lock only the writer for sending.
+        let mut writer = self.writer.lock().await;
+        writer.write_bytes(&send_vec).await?;
+        writer.flush().await?;
         Ok(())
     }
 }
 
 impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GProtocolV4<R, W> {
-    async fn read(&mut self) -> Result<Arc<dyn GPacket>, ProtocolError> {
-        if self.packet_queue.is_empty() {
-            self.read_from_stream().await?;
+    /// Read a packet. If the packet queue is empty, fill it by reading from the stream.
+    async fn read(&self) -> Result<Arc<dyn GPacket>, ProtocolError> {
+        {
+            let queue = self.packet_queue.lock().await;
+            if queue.is_empty() {
+                drop(queue);
+                self.read_from_stream().await?;
+            }
         }
-        self.packet_queue
-            .pop_front()
-            .ok_or(ProtocolError::EmptyPacketQueue)
+        let mut queue = self.packet_queue.lock().await;
+        queue.pop_front().ok_or(ProtocolError::EmptyPacketQueue)
     }
 
-    async fn write(&mut self, packet: &(dyn GPacket + Send)) -> Result<(), ProtocolError> {
+    /// Write a packet.
+    async fn write(&self, packet: &(dyn GPacket + Send)) -> Result<(), ProtocolError> {
         self.send_packet(packet).await
     }
 
+    /// Return the protocol version.
     fn version(&self) -> u8 {
         4
     }

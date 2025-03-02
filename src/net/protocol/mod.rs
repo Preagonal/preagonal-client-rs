@@ -48,11 +48,11 @@ pub enum ProtocolError {
 pub trait Protocol {
     /// Read the next packet from the protocol.
     fn read(
-        &mut self,
+        &self,
     ) -> impl std::future::Future<Output = Result<Arc<dyn GPacket>, ProtocolError>> + Send;
     /// Write a packet to the protocol.
     fn write(
-        &mut self,
+        &self,
         packet: &(dyn GPacket + Send),
     ) -> impl std::future::Future<Output = Result<(), ProtocolError>> + Send;
     /// Get the protocol version.
@@ -69,7 +69,7 @@ pub enum GProtocolEnum<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send
 }
 
 impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GProtocolEnum<R, W> {
-    async fn read(&mut self) -> Result<Arc<dyn GPacket>, ProtocolError> {
+    async fn read(&self) -> Result<Arc<dyn GPacket>, ProtocolError> {
         match self {
             GProtocolEnum::V4(proto) => proto.read().await,
             GProtocolEnum::V5(proto) => proto.read().await,
@@ -77,7 +77,7 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GPr
         }
     }
 
-    async fn write(&mut self, packet: &(dyn GPacket + Send)) -> Result<(), ProtocolError> {
+    async fn write(&self, packet: &(dyn GPacket + Send)) -> Result<(), ProtocolError> {
         match self {
             GProtocolEnum::V4(proto) => proto.write(packet).await,
             GProtocolEnum::V5(proto) => proto.write(packet).await,

@@ -1,13 +1,20 @@
 use std::sync::Arc;
 
-use serenity::all::{CommandInteraction, CommandOptionType, CreateCommandOption, ResolvedValue};
+use serenity::all::{
+    CommandInteraction, CommandOptionType, CreateCommandOption, CreateInteractionResponse,
+    CreateInteractionResponseMessage, ResolvedValue,
+};
 use serenity::builder::CreateCommand;
 
-use crate::net::packet::GPacket;
+use crate::net::client::ClientError;
+use crate::net::client::rc::RemoteControlClient;
 use crate::net::packet::from_client::rc_chat::RcChat;
 
 /// Sends a message to RC.
-pub fn run(interaction: &CommandInteraction) -> Option<Arc<dyn GPacket + Send>> {
+pub async fn run(
+    interaction: &CommandInteraction,
+    rc: Arc<RemoteControlClient>,
+) -> Result<CreateInteractionResponse, ClientError> {
     // Get the user who ran the interaction
     let nick = interaction.user.name.clone();
 
@@ -21,13 +28,21 @@ pub fn run(interaction: &CommandInteraction) -> Option<Arc<dyn GPacket + Send>> 
         }
     });
 
-    message
-        .map(|msg| Arc::new(RcChat::new(format!("{}: {}", nick, msg))) as Arc<dyn GPacket + Send>)
+    if let Some(msg) = message {
+        let chat_packet = RcChat::new(format!("{}: {}", nick, msg));
+        rc.client.send_packet(Arc::new(chat_packet)).await?;
+        return Ok(CreateInteractionResponse::Message(
+            CreateInteractionResponseMessage::new().content("Message sent to RC"),
+        ));
+    }
+    return Ok(CreateInteractionResponse::Message(
+        CreateInteractionResponseMessage::new().content("No message found"),
+    ));
 }
 
 /// Registers the command.
 pub fn register() -> CreateCommand {
-    CreateCommand::new("sendtorc")
+    CreateCommand::new("send_to_rc")
         .description("Sends a message to RC")
         .add_option(
             CreateCommandOption::new(CommandOptionType::String, "message", "The message to send")

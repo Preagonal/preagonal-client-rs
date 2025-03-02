@@ -1,11 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
-use discord::commands::sendtorc;
+use consts::{NC_PROTOCOL_VERSION, RC_PROTOCOL_VERSION};
+use discord::commands::{add_weapon, get_weapon, sendtorc};
 use net::{
-    client::rc::{
-        RemoteControl,
-        config::{RcConfig, RcLoginConfig},
-    },
+    client::{GClientConfig, GClientLoginConfig, rc::RemoteControlClient},
     packet::{PacketId, from_server::FromServerPacketId},
 };
 use serenity::{
@@ -35,7 +33,7 @@ pub mod utils;
 /// We derive Clone so we can easily capture fields.
 #[derive(Clone)]
 struct Handler {
-    rc: Arc<RemoteControl>,
+    rc: Arc<RemoteControlClient>,
     guild_id: GuildId,
     channel_id: ChannelId,
 }
@@ -44,29 +42,37 @@ struct Handler {
 impl EventHandler for Handler {
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::Command(command) = interaction {
-            let content = match command.data.name.as_str() {
-                "sendtorc" => sendtorc::run(&command),
-                _ => None,
+            let response = match command.data.name.as_str() {
+                "send_to_rc" => sendtorc::run(&command, self.rc.clone()).await,
+                "get_weapon" => get_weapon::run(&command, self.rc.clone()).await,
+                "add_weapon" => add_weapon::run(&command, self.rc.clone()).await,
+                _ => {
+                    log::warn!("No command found: {}", command.data.name);
+                    Ok(CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new().content("No command found"),
+                    ))
+                }
             };
 
-            if let Some(packet) = content {
-                self.rc
-                    .send_rc_packet(packet)
+            if let Err(why) = response {
+                log::error!("Error running command: {:?}", why);
+                command
+                    .create_response(
+                        &ctx.http,
+                        CreateInteractionResponse::Message(
+                            CreateInteractionResponseMessage::new()
+                                .content(format!("Error running command: {:?}", why)),
+                        ),
+                    )
                     .await
-                    .expect("Error sending packet");
-
-                // Respond to the interaction.
-                let response = CreateInteractionResponse::Message(
-                    CreateInteractionResponseMessage::new().content("Message sent to RC"),
-                );
-
-                if let Err(why) = command.create_response(&ctx.http, response).await {
-                    log::error!("Error responding to Discrord command: {:?}", why);
-                }
+                    .expect("Error sending error response");
                 return;
             }
 
-            log::warn!("Unknown Discord command received: {}", command.data.name);
+            if let Err(why) = command.create_response(&ctx.http, response.unwrap()).await {
+                log::error!("Error responding to Discord command: {:?}", why);
+            }
+            return;
         }
     }
 
@@ -76,7 +82,14 @@ impl EventHandler for Handler {
         // Set available commands.
         if let Err(why) = self
             .guild_id
-            .set_commands(&ctx.http, vec![sendtorc::register()])
+            .set_commands(
+                &ctx.http,
+                vec![
+                    sendtorc::register(),
+                    get_weapon::register(),
+                    add_weapon::register(),
+                ],
+            )
             .await
         {
             log::error!("Error setting Discord commands: {:?}", why);
@@ -90,6 +103,7 @@ impl EventHandler for Handler {
 
         // register event handler for RcChat
         self.rc
+            .client
             .register_event_handler(
                 PacketId::FromServer(FromServerPacketId::RcChat),
                 move |event| {
@@ -121,6 +135,8 @@ async fn main() {
     log4rs::init_file("logging_config.yaml", Default::default())
         .expect("Failed to initialize logging.");
 
+    // console_subscriber::init();
+
     // Load configuration.
     let config = config::get_config();
 
@@ -140,24 +156,26 @@ async fn main() {
             );
 
             // Create RcConfig
-            let rc_config = RcConfig {
+            let rc_config = GClientConfig {
                 host: server.host,
+                rc_protocol_version: RC_PROTOCOL_VERSION.to_string(),
+                nc_protocol_version: NC_PROTOCOL_VERSION.to_string(),
                 port: server.port,
-                login: RcLoginConfig {
+                login: GClientLoginConfig {
                     username: login.auth.account_name,
                     password: login.auth.password,
                     identification: login.identification,
                 },
                 timeout: Duration::from_secs(5),
-                nc_auto_disconnect: Duration::from_secs(60 * 5),
+                nc_auto_disconnect: Duration::from_secs(60),
             };
 
             // Create RemoteControl with provided configuration.
-            let rc = RemoteControl::connect(rc_config)
+            let rc = RemoteControlClient::connect(rc_config)
                 .await
-                .expect("Error connecting to RemoteControl");
+                .expect("Error connecting to server");
 
-            rc.rc_login().await.expect("Error logging in");
+            rc.login().await.expect("Error logging in");
 
             // == Discord ==
             let guild_id = server.discord.server_id;
@@ -182,13 +200,7 @@ async fn main() {
                 client.start().await.expect("Error running Discord client");
             });
 
-            let wep = rc
-                .nc_get_weapon("test".to_string())
-                .await
-                .expect("Error getting weapon");
-            log::info!("Weapon: {:?}", wep);
-
-            rc.wait_shutdown().await;
+            rc.client.wait_for_tasks().await;
         });
     }
 
