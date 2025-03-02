@@ -115,14 +115,15 @@ impl GClient {
 
     /// Set the encryption key for the client. Only applicable to v5 protocol.
     pub async fn set_codec(&self, key: u8) -> Result<(), ClientError> {
-        Ok(match &*self.protocol {
+        match &*self.protocol {
             GProtocolEnum::V5(proto) => {
                 proto.set_encryption_key(key)?;
             }
             _ => {
                 return Err(ClientError::UnsupportedProtocolVersion);
             }
-        })
+        };
+        Ok(())
     }
 
     /// Register an event handler for a specific PacketId.
@@ -155,64 +156,62 @@ impl GClient {
     }
 
     /// Receiving packets loop.
-    fn read_loop_fut(
+    async fn read_loop_fut(
         protocol: Arc<GProtocolEnum<BufReader<OwnedReadHalf>, OwnedWriteHalf>>,
         pending_requests: PendingRequests,
         event_handlers: Arc<Mutex<HashMap<PacketId, Vec<Arc<EventHandlerFn>>>>>,
         shutdown: Arc<Notify>,
         join_set: Arc<Mutex<JoinSet<()>>>,
-    ) -> impl Future<Output = ()> {
-        async move {
-            loop {
-                tokio::select! {
-                    packet_result = async {
-                        protocol.read().await
-                    } => {
-                        match packet_result {
-                            Ok(packet) => {
-                                let packet_id = packet.id();
-                                let mut pending = pending_requests.lock().await;
-                                if let Some(sender) = pending.remove(&packet_id) {
-                                    log::debug!("Received response packet: {:?}", packet);
-                                    let _ = sender.send(packet.clone());
-                                } else {
-                                    log::debug!("Received unsolicited packet: {:?}", packet);
-                                    let event = PacketEvent { packet: packet.clone() };
-                                    let handlers = {
-                                        let map = event_handlers.lock().await;
-                                        map.get(&packet_id).cloned()
-                                    };
-                                    if let Some(handler_vec) = handlers {
-                                        for handler in handler_vec {
-                                            let event_clone = event.clone();
-                                            let shutdown_clone = Arc::clone(&shutdown);
-                                            let task = async move {
-                                                tokio::select! {
-                                                    _ = shutdown_clone.notified() => {
-                                                        log::debug!("Callback task received shutdown signal, exiting early.");
-                                                    }
-                                                    _ = (handler)(event_clone) => {
-                                                        // Callback completed normally.
-                                                    }
+    ) {
+        loop {
+            tokio::select! {
+                packet_result = async {
+                    protocol.read().await
+                } => {
+                    match packet_result {
+                        Ok(packet) => {
+                            let packet_id = packet.id();
+                            let mut pending = pending_requests.lock().await;
+                            if let Some(sender) = pending.remove(&packet_id) {
+                                log::debug!("Received response packet: {:?}", packet);
+                                let _ = sender.send(packet.clone());
+                            } else {
+                                log::debug!("Received unsolicited packet: {:?}", packet);
+                                let event = PacketEvent { packet: packet.clone() };
+                                let handlers = {
+                                    let map = event_handlers.lock().await;
+                                    map.get(&packet_id).cloned()
+                                };
+                                if let Some(handler_vec) = handlers {
+                                    for handler in handler_vec {
+                                        let event_clone = event.clone();
+                                        let shutdown_clone = Arc::clone(&shutdown);
+                                        let task = async move {
+                                            tokio::select! {
+                                                _ = shutdown_clone.notified() => {
+                                                    log::debug!("Callback task received shutdown signal, exiting early.");
                                                 }
-                                            };
-                                            let mut join_set_mut = join_set.lock().await;
-                                            join_set_mut.spawn(task);
-                                        }
+                                                _ = (handler)(event_clone) => {
+                                                    // Callback completed normally.
+                                                }
+                                            }
+                                        };
+                                        let mut join_set_mut = join_set.lock().await;
+                                        join_set_mut.spawn(task);
                                     }
                                 }
                             }
-                            Err(e) => {
-                                log::error!("Error reading packet: {:?}", e);
-                                shutdown.notify_waiters();
-                                break;
-                            }
+                        }
+                        Err(e) => {
+                            log::error!("Error reading packet: {:?}", e);
+                            shutdown.notify_waiters();
+                            break;
                         }
                     }
-                    _ = shutdown.notified() => {
-                        log::debug!("Shutdown signal received in read loop.");
-                        break;
-                    }
+                }
+                _ = shutdown.notified() => {
+                    log::debug!("Shutdown signal received in read loop.");
+                    break;
                 }
             }
         }

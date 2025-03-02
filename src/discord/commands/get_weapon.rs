@@ -47,9 +47,9 @@ pub async fn run(
             ),
         ));
     }
-    return Ok(CreateInteractionResponse::Message(
+    Ok(CreateInteractionResponse::Message(
         CreateInteractionResponseMessage::new().content("No `weapon` parameter found."),
-    ));
+    ))
 }
 
 /// Registers the command.

@@ -35,9 +35,9 @@ pub async fn run(
             CreateInteractionResponseMessage::new().content("Message sent to RC"),
         ));
     }
-    return Ok(CreateInteractionResponse::Message(
+    Ok(CreateInteractionResponse::Message(
         CreateInteractionResponseMessage::new().content("No message found"),
-    ));
+    ))
 }
 
 /// Registers the command.

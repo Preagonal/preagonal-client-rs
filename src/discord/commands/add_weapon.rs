@@ -81,9 +81,9 @@ pub async fn run(
         .send_packet(Arc::new(weapon_packet))
         .await?;
 
-    return Ok(CreateInteractionResponse::Message(
+    Ok(CreateInteractionResponse::Message(
         CreateInteractionResponseMessage::new().content("Weapon added"),
-    ));
+    ))
 }
 
 /// Registers the command.
