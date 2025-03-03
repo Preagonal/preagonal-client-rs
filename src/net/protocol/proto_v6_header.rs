@@ -163,7 +163,7 @@ impl GProtocolV6HeaderFormat {
         Ok(GProtocolV6PacketHeader {
             compression,
             checksum: checksum as u8,
-            length: length as usize,
+            length,
             id: packet_id,
         })
     }
@@ -209,11 +209,6 @@ impl GProtocolV6HeaderFormat {
 
     /// Helper: produce a big-endian byte buffer for an integer.
     fn get_buffer_from_num(value: usize, size: usize) -> Result<Vec<u8>, ProtocolError> {
-        if size > usize::MAX {
-            return Err(ProtocolError::InvalidHeaderFormat(
-                "Size too large".to_string(),
-            ));
-        }
         let mut buffer = vec![0u8; size];
         for i in 0..size {
             buffer[size - 1 - i] = (value >> (8 * i)) as u8;

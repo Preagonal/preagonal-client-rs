@@ -20,7 +20,7 @@ use super::proto_v6_header::{GProtocolV6HeaderFormat, GProtocolV6PacketHeader};
 #[derive(Debug, Clone)]
 pub struct EncryptionKeys {
     /// The private key.
-    pub rsa_private_key: RsaPrivateKey,
+    pub rsa_private_key: Box<RsaPrivateKey>,
     // TODO: The public key.
 }
 
@@ -91,7 +91,7 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV6<R, W
 
             log::trace!("Got header: {:?}", header);
             let mut queue_packet = true;
-            if data.len() < header.length as usize {
+            if data.len() < header.length {
                 log::warn!(
                     "Invalid packet length: expected {}, got {}",
                     header.length,
@@ -102,7 +102,7 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV6<R, W
 
             data.drain(..self.header_format.header_length);
             let packet: Vec<u8> = data
-                .drain(..(header.length as usize - self.header_format.header_length))
+                .drain(..(header.length - self.header_format.header_length))
                 .collect();
 
             let packet: Vec<u8> = match header.compression {
@@ -234,10 +234,10 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV6<R, W
         let total_length = self.header_format.header_length + packet_data.len();
         let checksum = self.to_client_checksum.load(Ordering::Acquire);
         let header = GProtocolV6PacketHeader {
-            compression: compression.into(),
-            checksum: checksum,
+            compression,
+            checksum,
             length: total_length,
-            id: packet.id().into(),
+            id: packet.id(),
         };
         let header_bytes = self.header_format.create_header(&header)?;
         if checksum == 255 {

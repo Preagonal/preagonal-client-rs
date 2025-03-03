@@ -138,7 +138,6 @@ impl EventHandler for Handler {
         // register event handler for NpcWeaponScript
         for client in self.game_clients.iter() {
             let http = http.clone(); // Clone http for each iteration
-            let channel_id = channel_id; // Copy channel_id for use in the closure
             client
                 .register_event_handler(
                     PacketId::FromServer(FromServerPacketId::NpcWeaponScript),
@@ -265,8 +264,8 @@ pub async fn create_game_client(client: config::ClientConfig) -> Arc<GameClient>
         client_type: GClientConfigType::Game(GameClientConfig {
             version: GAME_PROTOCOL_VERSION.to_string(),
             encryption_keys: EncryptionKeys {
-                rsa_private_key: RsaPrivateKey::from_pkcs8_pem(GAME_CLIENT_PRIVATE_KEY)
-                    .expect("Error loading RSA private key"),
+                rsa_private_key: Box::new(RsaPrivateKey::from_pkcs8_pem(GAME_CLIENT_PRIVATE_KEY)
+                    .expect("Error loading RSA private key")),
             },
             header_format: GProtocolV6HeaderFormat::try_from("EILLLT")
                 .expect("Error parsing header format"),
