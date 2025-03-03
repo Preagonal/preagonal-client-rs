@@ -7,14 +7,13 @@ use serenity::all::{
 use serenity::builder::CreateCommand;
 
 use crate::net::client::ClientError;
+use crate::net::client::nc::NpcControlClientTrait;
 use crate::net::client::rc::RemoteControlClient;
-use crate::net::packet::from_client::nc_weapon_get::NcWeaponGet;
-use crate::net::packet::from_server::FromServerPacketId;
 
 /// Sends a message to RC.
 pub async fn run(
     interaction: &CommandInteraction,
-    rc: Arc<RemoteControlClient>,
+    rc: Vec<Arc<RemoteControlClient>>,
 ) -> Result<CreateInteractionResponse, ClientError> {
     // Get the right option
     let options = interaction.data.options();
@@ -27,25 +26,20 @@ pub async fn run(
     });
 
     if let Some(msg) = weapon {
-        let weapon_packet = NcWeaponGet::new(msg);
-        let response = rc
-            .get_npc_control()
-            .await
-            .expect("Failed to get npc control")
-            .client
-            .send_and_receive(Arc::new(weapon_packet), FromServerPacketId::NcWeaponGet)
-            .await?;
-        // get response.data serialize as utf8
-        let response_data = response.data();
-        let response_data = String::from_utf8_lossy(response_data.as_slice());
-        log::info!("Weapon response: {}", response_data);
-        return Ok(CreateInteractionResponse::Message(
-            CreateInteractionResponseMessage::new().add_embed(
-                CreateEmbed::new()
-                    .title("Weapon")
-                    .description(response_data),
-            ),
-        ));
+        let mut response_data: Vec<String> = Vec::new();
+        for client in rc.iter() {
+            let response = client.nc_get_weapon(msg.clone()).await?;
+            // get response.data serialize as utf8
+            let res = response.data();
+            let res = String::from_utf8_lossy(res.as_slice());
+            response_data.push(res.to_string());
+        }
+        log::info!("Weapon response: {:?}", response_data);
+        let mut message = CreateInteractionResponseMessage::new();
+        for data in &response_data {
+            message = message.add_embed(CreateEmbed::new().title(&msg).description(data));
+        }
+        return Ok(CreateInteractionResponse::Message(message));
     }
     Ok(CreateInteractionResponse::Message(
         CreateInteractionResponseMessage::new().content("No `weapon` parameter found."),

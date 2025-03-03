@@ -16,10 +16,6 @@ use crate::{
 
 use super::{Protocol, ProtocolError};
 
-/// The encryption start value for the v4 protocol.
-/// (This is the same value as used in v5.)
-pub const V4_ENCRYPTION_START: u32 = 0x4A80B38;
-
 /// Struct representing the v4 protocol, now with separate locks for reading, writing,
 /// and for the packet queue.
 pub struct GProtocolV4<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> {

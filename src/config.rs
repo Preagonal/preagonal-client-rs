@@ -6,12 +6,23 @@ use std::sync::OnceLock;
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
 
+/// RcClient, or GameClient
+#[derive(Debug, Deserialize, Clone)]
+pub enum ClientType {
+    /// The RemoteControl client.
+    RemoteControl,
+    /// The Game client.
+    Game,
+}
+
 /// Get the configuration.
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     /// The server to connect to.
     #[serde(default)]
-    pub servers: Vec<ServerConfig>,
+    pub clients: Vec<ClientConfig>,
+    /// The discord configuration
+    pub discord: DiscordConfig,
 }
 
 /// The configuration for a single login
@@ -20,8 +31,6 @@ pub struct LoginConfig {
     /// The nickname to use
     #[serde(default)]
     pub nick: Option<String>,
-    /// The version to use
-    pub version: String,
     #[serde(default)]
     /// The system ids to use
     pub identification: Vec<String>,
@@ -40,15 +49,15 @@ pub struct LoginAuth {
 
 /// The server configuration
 #[derive(Debug, Deserialize, Clone)]
-pub struct ServerConfig {
+pub struct ClientConfig {
     /// The host to connect to
     pub host: String,
     /// The port to connect to
     pub port: u16,
+    /// The type of client to use
+    pub client_type: ClientType,
     /// The login to use for this server
     pub login: LoginConfig,
-    /// The discord configuration
-    pub discord: DiscordConfig,
 }
 
 /// The discord configuration

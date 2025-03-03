@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use proto_v4::GProtocolV4;
 use proto_v5::GProtocolV5;
+use proto_v6::GProtocolV6;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -15,6 +16,10 @@ use super::packet::{GPacket, PacketConversionError};
 pub mod proto_v4;
 /// Module containing the v5 protocol implementation.
 pub mod proto_v5;
+/// Module containing the v6 protocol implementation.
+pub mod proto_v6;
+/// The v6 protocol header format.
+pub mod proto_v6_header;
 
 /// Error type for protocol errors.
 #[derive(Error, Debug)]
@@ -38,6 +43,26 @@ pub enum ProtocolError {
     /// Unexpected empty packet queue.
     #[error("Unexpected empty packet queue")]
     EmptyPacketQueue,
+
+    /// Invalid header format.
+    #[error("Invalid header format: {0}")]
+    InvalidHeaderFormat(String),
+
+    /// Invalid header
+    #[error("Invalid header: {0}")]
+    InvalidHeader(String),
+
+    /// Invalid packet length.
+    #[error("Invalid packet length. {0} > {1}")]
+    InvalidPacketLength(usize, usize),
+
+    /// Rsa decryption error.
+    #[error("Rsa decryption error: {0}")]
+    RsaDecryption(#[from] rsa::errors::Error),
+
+    /// General decryption error.
+    #[error("Decryption error: {0}")]
+    Decryption(String),
 
     /// Other error.
     #[error("Other: {0}")]
@@ -65,7 +90,8 @@ pub enum GProtocolEnum<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send
     V4(GProtocolV4<R, W>),
     /// The v5 protocol.
     V5(GProtocolV5<R, W>),
-    // V6(GProtocolV6<R, W>),
+    /// The v6 protocol.
+    V6(GProtocolV6<R, W>),
 }
 
 impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GProtocolEnum<R, W> {
@@ -73,7 +99,7 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GPr
         match self {
             GProtocolEnum::V4(proto) => proto.read().await,
             GProtocolEnum::V5(proto) => proto.read().await,
-            // GProtocolEnum::V6(proto) => proto.read(),
+            GProtocolEnum::V6(proto) => proto.read().await,
         }
     }
 
@@ -81,7 +107,7 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GPr
         match self {
             GProtocolEnum::V4(proto) => proto.write(packet).await,
             GProtocolEnum::V5(proto) => proto.write(packet).await,
-            // GProtocolEnum::V6(proto) => proto.write(packet),
+            GProtocolEnum::V6(proto) => proto.write(packet).await,
         }
     }
 
@@ -89,7 +115,7 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GPr
         match self {
             GProtocolEnum::V4(proto) => proto.version(),
             GProtocolEnum::V5(proto) => proto.version(),
-            // GProtocolEnum::V6(proto) => proto.version(),
+            GProtocolEnum::V6(proto) => proto.version(),
         }
     }
 }

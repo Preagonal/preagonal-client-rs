@@ -23,10 +23,6 @@ pub const GUINT40_MAX: u64 = 0xFFFFFFFF;
 /// An error type for Graal IO operations.
 #[derive(Debug, Error)]
 pub enum GraalIoError {
-    /// The byte was not found in the stream.
-    #[error("Byte not found: {0}")]
-    ByteNotFound(u8),
-
     /// The value exceeds the maximum for a Graal-encoded integer.
     #[error(
         "Value exceeds maximum for Graal-encoded integer. Value was {0}, but cannot exceed {1}."

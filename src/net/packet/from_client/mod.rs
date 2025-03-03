@@ -1,5 +1,7 @@
 #![deny(missing_docs)]
 
+/// Game Login packet.
+pub mod game_login;
 /// NC Login packet.
 pub mod nc_login;
 /// NC query packet.
@@ -21,10 +23,10 @@ define_packets! {
         BoardModify = 0x1,
         PlayerProps = 0x2,
         // TODO: This could be NpcProps
-        NcLogin = 0x3,
+        V4Login = 0x3,
         BombAdd = 0x4,
-        Login = 0x5,
-        RcLogin = 0x6,
+        V6Login = 0x5,
+        V5Login = 0x6,
         HorseAdd = 0x7,
         HorseDel = 0x8,
         ArrowAdd = 0x9,

@@ -1,21 +1,28 @@
 use std::{sync::Arc, time::Duration};
 
-use consts::{NC_PROTOCOL_VERSION, RC_PROTOCOL_VERSION};
+use consts::{GAME_CLIENT_PRIVATE_KEY, GAME_PROTOCOL_VERSION, RC_PROTOCOL_VERSION};
 use discord::commands::{add_weapon, get_weapon, sendtorc};
 use net::{
-    client::{GClientConfig, GClientLoginConfig, rc::RemoteControlClient},
-    packet::{PacketId, from_server::FromServerPacketId},
+    client::{
+        GClientConfig, GClientConfigType, GClientLoginConfig, GClientTrait, GameClientConfig,
+        RemoteControlConfig, game::GameClient, rc::RemoteControlClient,
+    },
+    packet::{
+        PacketId,
+        from_server::{FromServerPacketId, weapon_script::NpcWeaponScript},
+    },
+    protocol::{proto_v6::EncryptionKeys, proto_v6_header::GProtocolV6HeaderFormat},
 };
+use rsa::{RsaPrivateKey, pkcs8::DecodePrivateKey};
 use serenity::{
     Client,
     all::{
-        ChannelId, CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage,
-        GuildId, Interaction, Ready,
+        ChannelId, CreateAttachment, CreateInteractionResponse, CreateInteractionResponseMessage,
+        CreateMessage, GuildId, Interaction, Ready,
     },
     async_trait,
     prelude::*,
 };
-use tokio::task::JoinSet;
 
 /// The config module contains the configuration for the bot.
 pub mod config;
@@ -30,10 +37,9 @@ pub mod net;
 /// The utils module contains utility functions.
 pub mod utils;
 
-/// We derive Clone so we can easily capture fields.
-#[derive(Clone)]
 struct Handler {
-    rc: Arc<RemoteControlClient>,
+    rc_clients: Vec<Arc<RemoteControlClient>>,
+    game_clients: Vec<Arc<GameClient>>,
     guild_id: GuildId,
     channel_id: ChannelId,
 }
@@ -43,9 +49,9 @@ impl EventHandler for Handler {
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::Command(command) = interaction {
             let response = match command.data.name.as_str() {
-                "send_to_rc" => sendtorc::run(&command, self.rc.clone()).await,
-                "get_weapon" => get_weapon::run(&command, self.rc.clone()).await,
-                "add_weapon" => add_weapon::run(&command, self.rc.clone()).await,
+                "send_to_rc" => sendtorc::run(&command, self.rc_clients.clone()).await,
+                "get_weapon" => get_weapon::run(&command, self.rc_clients.clone()).await,
+                "add_weapon" => add_weapon::run(&command, self.rc_clients.clone()).await,
                 _ => {
                     log::warn!("No command found: {}", command.data.name);
                     Ok(CreateInteractionResponse::Message(
@@ -102,30 +108,69 @@ impl EventHandler for Handler {
         let http = ctx.http.clone();
 
         // register event handler for RcChat
-        self.rc
-            .client
-            .register_event_handler(
-                PacketId::FromServer(FromServerPacketId::RcChat),
-                move |event| {
-                    let channel_id = channel_id;
-                    let http = http.clone();
-                    async move {
-                        let chat_message = event
-                            .packet
-                            .data()
-                            .iter()
-                            .map(|&byte| byte as char)
-                            .collect::<String>();
-                        if let Err(why) = channel_id
-                            .send_message(&http, CreateMessage::new().content(chat_message))
-                            .await
-                        {
-                            log::error!("Error sending message: {:?}", why);
+        for client in self.rc_clients.iter() {
+            let http = http.clone(); // Clone http for each iteration
+            client
+                .register_event_handler(
+                    PacketId::FromServer(FromServerPacketId::RcChat),
+                    move |event| {
+                        let channel_id = channel_id;
+                        let http = http.clone();
+                        async move {
+                            let chat_message = event
+                                .packet
+                                .data()
+                                .iter()
+                                .map(|&byte| byte as char)
+                                .collect::<String>();
+                            if let Err(why) = channel_id
+                                .send_message(&http, CreateMessage::new().content(chat_message))
+                                .await
+                            {
+                                log::error!("Error sending message: {:?}", why);
+                            }
                         }
-                    }
-                },
-            )
-            .await;
+                    },
+                )
+                .await;
+        }
+
+        // register event handler for NpcWeaponScript
+        for client in self.game_clients.iter() {
+            let http = http.clone(); // Clone http for each iteration
+            let channel_id = channel_id; // Copy channel_id for use in the closure
+            client
+                .register_event_handler(
+                    PacketId::FromServer(FromServerPacketId::NpcWeaponScript),
+                    move |event| {
+                        let channel_id = channel_id;
+                        let http = http.clone();
+                        async move {
+                            let packet = NpcWeaponScript::try_from(event.packet)
+                                .expect("Error parsing weapon script packet");
+                            log::info!("Received weapon script: {:?}", packet);
+
+                            // Upload the weapon script to Discord as an attachment.
+                            let script = packet.weapon_bytecode;
+                            let script_name = packet.script_name;
+                            let script_attachment = CreateMessage::new()
+                                .content(format!("Weapon script: **{}**", script_name))
+                                .add_file(CreateAttachment::bytes(
+                                    script,
+                                    format!("{}.gs2bc", script_name),
+                                ));
+
+                            // Create a message in the channel.
+                            if let Err(why) =
+                                channel_id.send_message(&http, script_attachment).await
+                            {
+                                log::error!("Error sending message: {:?}", why);
+                            }
+                        }
+                    },
+                )
+                .await;
+        }
     }
 }
 
@@ -140,69 +185,134 @@ async fn main() {
     // Load configuration.
     let config = config::get_config();
 
-    // Spawn TCP/network tasks for each server.
-    let mut server_tasks = JoinSet::new();
-    for server in &config.servers {
-        // Clone the server config so we can move it into the task.
-        let server = server.clone();
-        server_tasks.spawn(async move {
-            let login = server.login.clone();
+    let mut rc_clients: Vec<Arc<RemoteControlClient>> = Vec::new();
+    let mut game_clients: Vec<Arc<GameClient>> = Vec::new();
 
-            log::info!(
-                "Connecting to server: {}:{} with login: {}",
-                server.host,
-                server.port,
-                login.auth.account_name
-            );
-
-            // Create RcConfig
-            let rc_config = GClientConfig {
-                host: server.host,
-                rc_protocol_version: RC_PROTOCOL_VERSION.to_string(),
-                nc_protocol_version: NC_PROTOCOL_VERSION.to_string(),
-                port: server.port,
-                login: GClientLoginConfig {
-                    username: login.auth.account_name,
-                    password: login.auth.password,
-                    identification: login.identification,
-                },
-                timeout: Duration::from_secs(5),
-                nc_auto_disconnect: Duration::from_secs(60),
-            };
-
-            // Create RemoteControl with provided configuration.
-            let rc = RemoteControlClient::connect(rc_config)
-                .await
-                .expect("Error connecting to server");
-
-            rc.login().await.expect("Error logging in");
-
-            // == Discord ==
-            let guild_id = server.discord.server_id;
-            let channel_id = server.discord.channel_id;
-
-            // Set up the Discord client with our custom event handler.
-            let intents = GatewayIntents::GUILD_MESSAGES;
-            let token = server.discord.token.clone();
-            let handler = Handler {
-                rc: rc.clone(),
-                guild_id,
-                channel_id,
-            };
-
-            let mut client = Client::builder(token, intents)
-                .event_handler(handler)
-                .await
-                .expect("Error creating Discord client");
-
-            // Run the Discord client in its own task.
-            tokio::spawn(async move {
-                client.start().await.expect("Error running Discord client");
-            });
-
-            rc.client.wait_for_tasks().await;
-        });
+    for server in &config.clients {
+        match server.client_type {
+            config::ClientType::Game => {
+                let client = create_game_client(server.clone()).await;
+                game_clients.push(client);
+            }
+            config::ClientType::RemoteControl => {
+                let rc = create_rc_client(server.clone()).await;
+                rc_clients.push(rc);
+            }
+        }
+        // sleep for 5 seconds to avoid spamming the server
+        // TODO: Find a better way?
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 
-    server_tasks.join_all().await;
+    // == Discord ==
+    let guild_id = config.discord.server_id;
+    let channel_id = config.discord.channel_id;
+
+    // Set up the Discord client with our custom event handler.
+    let intents = GatewayIntents::GUILD_MESSAGES;
+    let token = config.discord.token.clone();
+    let handler = Handler {
+        rc_clients: rc_clients.clone(),
+        game_clients: game_clients.clone(),
+        guild_id,
+        channel_id,
+    };
+
+    let mut client = Client::builder(token, intents)
+        .event_handler(handler)
+        .await
+        .expect("Error creating Discord client");
+
+    // Run the Discord client in its own task.
+    tokio::spawn(async move {
+        client.start().await.expect("Error running Discord client");
+    });
+
+    // Now, wait on all clients to finish.
+    for client in rc_clients {
+        // TODO: This waits for each client to finish before moving on to the next one.
+        // We should wait for all clients to finish at the same time.
+        client.wait_for_tasks().await;
+    }
+
+    for client in game_clients {
+        // TODO: This waits for each client to finish before moving on to the next one.
+        // We should wait for all clients to finish at the same time.
+        client.wait_for_tasks().await;
+    }
+}
+
+/// Create a GameClient
+pub async fn create_game_client(client: config::ClientConfig) -> Arc<GameClient> {
+    let login = client.login.clone();
+
+    log::info!(
+        "Connecting to server: {}:{} with login: {}",
+        client.host,
+        client.port,
+        login.auth.account_name
+    );
+
+    let client_config = GClientConfig {
+        host: client.host,
+        port: client.port,
+        login: GClientLoginConfig {
+            username: login.auth.account_name,
+            password: login.auth.password,
+            identification: login.identification,
+        },
+        timeout: Duration::from_secs(5),
+        client_type: GClientConfigType::Game(GameClientConfig {
+            version: GAME_PROTOCOL_VERSION.to_string(),
+            encryption_keys: EncryptionKeys {
+                rsa_private_key: RsaPrivateKey::from_pkcs8_pem(GAME_CLIENT_PRIVATE_KEY)
+                    .expect("Error loading RSA private key"),
+            },
+            header_format: GProtocolV6HeaderFormat::try_from("EILLLT")
+                .expect("Error parsing header format"),
+        }),
+    };
+
+    let client = GameClient::connect(client_config)
+        .await
+        .expect("Error connecting to server");
+
+    client.login().await.expect("Error logging in");
+
+    client
+}
+
+/// Create a RemoteControlClient
+pub async fn create_rc_client(client: config::ClientConfig) -> Arc<RemoteControlClient> {
+    let login = client.login.clone();
+
+    log::info!(
+        "Connecting to server: {}:{} with login: {}",
+        client.host,
+        client.port,
+        login.auth.account_name
+    );
+
+    let client_config = GClientConfig {
+        host: client.host,
+        port: client.port,
+        login: GClientLoginConfig {
+            username: login.auth.account_name,
+            password: login.auth.password,
+            identification: login.identification,
+        },
+        timeout: Duration::from_secs(5),
+        client_type: GClientConfigType::RemoteControl(RemoteControlConfig {
+            version: RC_PROTOCOL_VERSION.to_string(),
+            nc_auto_disconnect: Duration::from_secs(60),
+        }),
+    };
+
+    let rc = RemoteControlClient::connect(client_config)
+        .await
+        .expect("Error connecting to server");
+
+    rc.login().await.expect("Error logging in");
+
+    rc
 }

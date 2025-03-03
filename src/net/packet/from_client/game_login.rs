@@ -9,20 +9,22 @@ use crate::net::{
 
 use super::FromClientPacketId;
 
-/// NcLogin packet.
+/// RcLogin packet.
 #[derive(Debug, Serialize)]
-pub struct NcLogin {
+pub struct GameLogin {
     /// Version.
     pub version: String,
     /// Account.
     pub account: GString,
     /// Password.
     pub password: GString,
+    /// PC IDs
+    pub identification: Vec<String>,
 }
 
-impl NcLogin {
+impl GameLogin {
     /// Create a new RcLogin packet.
-    pub fn new<S>(version: S, account: S, password: S) -> Self
+    pub fn new<S>(version: S, account: S, password: S, identification: Vec<String>) -> Self
     where
         S: Into<String>,
     {
@@ -30,16 +32,17 @@ impl NcLogin {
             version: version.into(),
             account: GString(account.into()),
             password: GString(password.into()),
+            identification,
         }
     }
 }
 
-impl GPacket for NcLogin {
+impl GPacket for GameLogin {
     fn id(&self) -> PacketId {
-        PacketId::FromClient(FromClientPacketId::V4Login)
+        PacketId::FromClient(FromClientPacketId::V6Login)
     }
 
     fn data(&self) -> Vec<u8> {
-        serialize_to_vector(&self).expect("Failed to serialize NcLogin packet")
+        serialize_to_vector(&self).expect("Failed to serialize RcLogin packet")
     }
 }

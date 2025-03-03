@@ -7,13 +7,13 @@ use serenity::all::{
 use serenity::builder::CreateCommand;
 
 use crate::net::client::ClientError;
+use crate::net::client::nc::NpcControlClientTrait;
 use crate::net::client::rc::RemoteControlClient;
-use crate::net::packet::from_client::nc_weapon_add::NcWeaponAdd;
 
 /// Adds a weapon.
 pub async fn run(
     interaction: &CommandInteraction,
-    rc: Arc<RemoteControlClient>,
+    rc: Vec<Arc<RemoteControlClient>>,
 ) -> Result<CreateInteractionResponse, ClientError> {
     // Get the right option
     let options = interaction.data.options();
@@ -73,16 +73,18 @@ pub async fn run(
         }
     };
 
-    let weapon_packet = NcWeaponAdd::new(&weapon, &"bcalarmclock.png".to_string(), &script);
-    rc.get_npc_control()
-        .await
-        .expect("Failed to get npc control")
-        .client
-        .send_packet(Arc::new(weapon_packet))
-        .await?;
+    for client in rc.iter() {
+        client
+            .nc_add_weapon(
+                weapon.clone(),
+                "bcalarmclock.png".to_string(),
+                script.clone(),
+            )
+            .await?;
+    }
 
     Ok(CreateInteractionResponse::Message(
-        CreateInteractionResponseMessage::new().content("Weapon added"),
+        CreateInteractionResponseMessage::new().content(format!("Weapon {} added. In order to get the weapon bytecode, ensure that:\n* The client has the weapon added\n* `//#CLIENTSIDE` is added to the beginning of the script.\n* The weapon has been changed, to trigger the client to get the new weapon.", weapon)),
     ))
 }
 

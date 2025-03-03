@@ -2,6 +2,9 @@
 
 use crate::define_packets;
 
+/// Weapon script packet.
+pub mod weapon_script;
+
 define_packets! {
     FromServerPacketId {
         LevelBoard = 0x0,
@@ -113,6 +116,7 @@ define_packets! {
         Move = 0xA5,
         NcWeaponListGet = 0xA7,
         GhostMode = 0xAA,
+        UnknownA8 = 0xA8,
         BigMap = 0xAB,
         MiniMap = 0xAC,
         GhostText = 0xAD,
@@ -131,6 +135,7 @@ define_packets! {
         Shoot2 = 0xBF,
         NcWeaponGet = 0xC0,
         ClearWeapons = 0xC2,
+        UnknownC5 = 0xC5,
         SetEncKey = 0xFC,
         Bundle = 0xFD
     }

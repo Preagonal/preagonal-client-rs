@@ -14,7 +14,7 @@ use crate::net::{
     protocol::{GProtocolEnum, Protocol},
 };
 
-use super::{ClientError, GClientConfig};
+use super::{ClientError, GClientConfig, GClientTrait};
 
 /// An asynchronous event handler function that receives a PacketEvent.
 type EventHandlerFn = dyn Fn(PacketEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync;
@@ -71,6 +71,12 @@ impl GClient {
             join_set_mut.spawn(read_handle);
         }
 
+        // On v6 clients, send the handshake packet.
+        // TODO: We can probably find a better place for this.
+        if let GProtocolEnum::V6(proto) = &*protocol {
+            proto.send_handshake().await?;
+        }
+
         let gclient = Arc::new(GClient {
             protocol: Arc::clone(&protocol),
             pending_requests: Arc::clone(&pending_requests),
@@ -81,36 +87,6 @@ impl GClient {
         });
 
         Ok(gclient)
-    }
-
-    /// Send a packet and wait for a response.
-    pub async fn send_and_receive(
-        &self,
-        packet: Arc<dyn GPacket + Send>,
-        response_packet: FromServerPacketId,
-    ) -> Result<Arc<dyn GPacket>, ClientError> {
-        let (tx, rx) = oneshot::channel();
-        {
-            let mut pending = self.pending_requests.lock().await;
-            pending.insert(PacketId::FromServer(response_packet), tx);
-        }
-        self.send_packet(packet).await?;
-        let packet = timeout(self.config.timeout, rx)
-            .await
-            .map_err(ClientError::Timeout)?
-            .map_err(ClientError::Recv)?;
-        Ok(packet)
-    }
-
-    /// Send a raw GClient packet.
-    pub async fn send_packet(&self, packet: Arc<dyn GPacket + Send>) -> Result<(), ClientError> {
-        log::debug!("Sending packet: {:?}", packet);
-        self.protocol
-            .write(packet.as_ref())
-            .await
-            .map_err(ClientError::Protocol)?;
-        log::debug!("Packet sent successfully.");
-        Ok(())
     }
 
     /// Set the encryption key for the client. Only applicable to v5 protocol.
@@ -124,35 +100,6 @@ impl GClient {
             }
         };
         Ok(())
-    }
-
-    /// Register an event handler for a specific PacketId.
-    pub async fn register_event_handler<F, Fut>(&self, packet_id: PacketId, handler: F)
-    where
-        F: Fn(PacketEvent) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let mut map = self.event_handlers.lock().await;
-        let entry = map.entry(packet_id).or_insert_with(Vec::new);
-        entry.push(Arc::new(move |event: PacketEvent| {
-            Box::pin(handler(event)) as Pin<Box<dyn Future<Output = ()> + Send>>
-        }) as Arc<EventHandlerFn>);
-    }
-
-    /// Send shutdown signal, and call wait_for_tasks.
-    pub async fn shutdown(&self) {
-        log::debug!("Shutting down. Waiting for tasks to complete...");
-        self.shutdown.notify_waiters();
-        self.wait_for_tasks().await;
-    }
-
-    /// Block until all tasks have completed.
-    pub async fn wait_for_tasks(&self) {
-        let join_set_owned = {
-            let mut join_set_mut = self.join_set.lock().await;
-            std::mem::take(&mut *join_set_mut)
-        };
-        join_set_owned.join_all().await;
     }
 
     /// Receiving packets loop.
@@ -173,10 +120,10 @@ impl GClient {
                             let packet_id = packet.id();
                             let mut pending = pending_requests.lock().await;
                             if let Some(sender) = pending.remove(&packet_id) {
-                                log::debug!("Received response packet: {:?}", packet);
+                                log::trace!("Received response packet: {:?}", packet);
                                 let _ = sender.send(packet.clone());
                             } else {
-                                log::debug!("Received unsolicited packet: {:?}", packet);
+                                log::trace!("Received unsolicited packet: {:?}", packet);
                                 let event = PacketEvent { packet: packet.clone() };
                                 let handlers = {
                                     let map = event_handlers.lock().await;
@@ -203,7 +150,7 @@ impl GClient {
                             }
                         }
                         Err(e) => {
-                            log::error!("Error reading packet: {:?}", e);
+                            log::error!("Error reading packet, shutting down: {:?}", e);
                             shutdown.notify_waiters();
                             break;
                         }
@@ -215,5 +162,98 @@ impl GClient {
                 }
             }
         }
+    }
+}
+
+impl GClientTrait for GClient {
+    async fn disconnect(&self) {
+        log::debug!("Shutting down. Waiting for tasks to complete...");
+        self.shutdown.notify_waiters();
+        self.wait_for_tasks().await;
+    }
+
+    async fn register_event_handler<F, Fut>(&self, packet_id: PacketId, handler: F)
+    where
+        F: Fn(PacketEvent) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let mut map = self.event_handlers.lock().await;
+        let entry = map.entry(packet_id).or_insert_with(Vec::new);
+        entry.push(Arc::new(move |event: PacketEvent| {
+            Box::pin(handler(event)) as Pin<Box<dyn Future<Output = ()> + Send + 'static>>
+        }) as Arc<EventHandlerFn>);
+    }
+
+    /// Send a raw GClient packet.
+    async fn send_packet(&self, packet: Arc<dyn GPacket + Send>) -> Result<(), ClientError> {
+        log::trace!("Sending packet: {:?}", packet);
+        let result = self
+            .protocol
+            .write(packet.as_ref())
+            .await
+            .map_err(ClientError::Protocol);
+
+        if let Err(ref err) = result {
+            log::error!("Failed to send packet, shutting down: {:?}", err);
+            self.disconnect().await;
+        } else {
+            log::debug!("Packet sent successfully.");
+        }
+
+        result
+    }
+
+    async fn send_and_receive(
+        &self,
+        packet: Arc<dyn GPacket + Send>,
+        response_packet: FromServerPacketId,
+    ) -> Result<Arc<dyn GPacket>, ClientError> {
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut pending = self.pending_requests.lock().await;
+            pending.insert(PacketId::FromServer(response_packet), tx);
+        }
+
+        // `send_packet` will already handle shutdown if it fails.
+        self.send_packet(packet).await?;
+
+        // Handle receive errors and shutdown
+        let packet = match timeout(self.config.timeout, rx).await {
+            Ok(recv_result) => match recv_result {
+                Ok(packet) => packet,
+                // RecvError is encountered when the sender is dropped, which should not happen, but
+                // we should handle it just in case.
+                Err(err) => {
+                    let error = ClientError::Recv(err);
+                    log::error!(
+                        "Failed to receive packet response, shutting down: {:?}",
+                        error
+                    );
+                    self.disconnect().await;
+                    return Err(error);
+                }
+            },
+            Err(err) => {
+                let error = ClientError::Timeout(err);
+                log::error!(
+                    "Expected packet response, but timed out after {} seconds: {:?}",
+                    self.config.timeout.as_secs(),
+                    error
+                );
+                self.disconnect().await;
+                return Err(error);
+            }
+        };
+
+        Ok(packet)
+    }
+
+    /// Block until all tasks have completed.
+    async fn wait_for_tasks(&self) {
+        let join_set_owned = {
+            let mut join_set_mut = self.join_set.lock().await;
+            std::mem::take(&mut *join_set_mut)
+        };
+        join_set_owned.join_all().await;
     }
 }

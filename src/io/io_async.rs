@@ -25,12 +25,32 @@ impl<R: AsyncRead + Unpin> AsyncGraalReader<R> {
         Ok(buffer)
     }
 
-    /// Reads until the specified delimiter is found (excluding the delimiter).
+    /// Read until EOF
+    pub async fn read_to_end(&mut self) -> Result<Vec<u8>, GraalIoError> {
+        let mut buffer = Vec::new();
+        self.inner.read_to_end(&mut buffer).await?;
+        Ok(buffer)
+    }
+
+    /// Return a Vec<Vec<u8>> based on the delimiter, until EOF.
+    pub async fn split_vec(&mut self, delimiter: u8) -> Result<Vec<Vec<u8>>, GraalIoError> {
+        let mut result = Vec::new();
+        loop {
+            let bytes = self.read_until(delimiter).await?;
+            if bytes.is_empty() {
+                break;
+            }
+            result.push(bytes);
+        }
+        Ok(result)
+    }
+
+    /// Reads until the specified delimiter is found (excluding the delimiter). If the delimiter is not found, the buffer will contain all bytes read until EOF.
     pub async fn read_until(&mut self, delimiter: u8) -> Result<Vec<u8>, GraalIoError> {
         let mut buffer = Vec::new();
         let bytes_read = self.inner.read_until(delimiter, &mut buffer).await?;
         if bytes_read == 0 || buffer.last() != Some(&delimiter) {
-            return Err(GraalIoError::ByteNotFound(delimiter));
+            return Ok(buffer);
         }
         buffer.pop(); // remove the delimiter
         Ok(buffer)

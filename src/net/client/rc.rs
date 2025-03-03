@@ -2,25 +2,39 @@ use std::sync::Arc;
 
 use tokio::{io::BufReader, net::TcpStream, sync::Mutex, time::Instant};
 
-use crate::net::{
-    packet::{
-        GPacket,
-        from_client::{nc_query::RcNcQuery, rc_login::RcLogin},
-        from_server::FromServerPacketId,
+use crate::{
+    consts::NC_PROTOCOL_VERSION,
+    net::{
+        client::{GClientTrait, NpcControlConfig},
+        packet::{
+            GPacket,
+            from_client::{nc_query::RcNcQuery, rc_login::RcLogin},
+            from_server::FromServerPacketId,
+        },
+        protocol::{GProtocolEnum, proto_v5::GProtocolV5},
     },
-    protocol::{GProtocolEnum, proto_v5::GProtocolV5},
 };
 
-use super::{ClientError, GClientConfig, gclient::GClient, nc::NpcControlClient};
+use super::{
+    ClientError, GClientConfig, GClientConfigType, RemoteControlConfig,
+    gclient::GClient,
+    nc::{NpcControlClient, NpcControlClientTrait},
+};
 
 /// A struct that contains the RemoteControlClient.
 pub struct RemoteControlClient {
     config: GClientConfig,
+    rc_specific_config: RemoteControlConfig,
     /// The internal client.
     pub client: Arc<GClient>,
-    cached_npc_server_address: Mutex<Option<(String, u16)>>,
     npc_control: Mutex<Option<Arc<NpcControlClient>>>,
     last_activity: Mutex<Instant>,
+}
+
+/// The RemoteControlClient trait.
+pub trait RemoteControlClientTrait {
+    /// Query the NPC server address from the RC server.
+    fn rc_query_nc_addr(&self) -> impl Future<Output = Result<Arc<dyn GPacket>, ClientError>>;
 }
 
 impl RemoteControlClient {
@@ -35,16 +49,21 @@ impl RemoteControlClient {
         let protocol = GProtocolEnum::V5(GProtocolV5::new(reader, write_half));
         let client = GClient::connect(cloned_config, protocol).await?;
 
+        let rc_specific_config = match &config.client_type {
+            GClientConfigType::RemoteControl(rc_config) => rc_config,
+            _ => return Err(ClientError::UnsupportedProtocolVersion),
+        };
+
         let client = Arc::new(Self {
             config: config.clone(),
+            rc_specific_config: rc_specific_config.clone(),
             client,
             npc_control: Mutex::new(None),
-            cached_npc_server_address: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
         });
 
         // Spawn the auto disconnect task.
-        let disconnect_after = config.nc_auto_disconnect;
+        let disconnect_after = rc_specific_config.nc_auto_disconnect;
         let self_clone = Arc::clone(&client);
         tokio::spawn(async move {
             loop {
@@ -68,36 +87,33 @@ impl RemoteControlClient {
         Ok(client)
     }
 
-    /// Disconnect from the server and destroy all client tasks.
-    pub async fn disconnect(&self) {
-        self.client.shutdown().await;
-    }
-
     /// Login to the server.
     pub async fn login(&self) -> Result<(), ClientError> {
         let v5_code: u8 = rand::random::<u8>() & 0x7f;
         let login_packet = RcLogin::new(
             v5_code,
-            self.config.rc_protocol_version.clone(),
+            self.rc_specific_config.version.clone(),
             self.config.login.username.clone(),
             self.config.login.password.clone(),
             self.config.login.identification.clone(),
         );
         {
             log::debug!("Sending v5 login packet: {:?}", login_packet);
-            self.client.send_packet(Arc::new(login_packet)).await?;
+            self.send_packet(Arc::new(login_packet)).await?;
             self.client.set_codec(v5_code).await?;
         }
         Ok(())
     }
 
-    /// Get the NPC control client.
-    pub async fn get_npc_control(&self) -> Result<Arc<NpcControlClient>, ClientError> {
-        log::debug!("Getting NPC control client");
-        // Get the cached NPC server address.
-        let mut cached_npc_server_address_guard = self.cached_npc_server_address.lock().await;
-        if cached_npc_server_address_guard.is_none() {
-            let nc_addr_packet = self.query_nc_addr().await?;
+    /// Get the NPC control client (internal).
+    async fn get_npc_control(&self) -> Result<Arc<NpcControlClient>, ClientError> {
+        log::debug!("Checking for existing NpcControlClient");
+        let mut npc_control_guard = self.npc_control.lock().await;
+        if npc_control_guard.is_none() {
+            log::debug!("Creating new NpcControlClient");
+            let mut config_clone = self.config.clone();
+
+            let nc_addr_packet = self.rc_query_nc_addr().await?;
             log::debug!("Received NPC Server Address packet: {:?}", nc_addr_packet);
 
             let mut data: String = nc_addr_packet.data().iter().map(|&b| b as char).collect();
@@ -114,18 +130,12 @@ impl RemoteControlClient {
                 .parse::<u16>()
                 .map_err(|_| ClientError::Other("Invalid NPC port".into()))?;
             log::debug!("Parsed NPC server address: {}:{}", npc_host, npc_port);
-            *cached_npc_server_address_guard = Some((npc_host.to_string(), npc_port));
-        }
 
-        log::debug!("Checking for existing NpcControlClient");
-        let mut npc_control_guard = self.npc_control.lock().await;
-        if npc_control_guard.is_none() {
-            log::debug!("Creating new NpcControlClient");
-            let mut config_clone = self.config.clone();
-            let (npc_host, npc_port) = cached_npc_server_address_guard.as_ref().unwrap();
-
-            config_clone.host = npc_host.clone();
-            config_clone.port = *npc_port;
+            config_clone.host = npc_host.to_string();
+            config_clone.port = npc_port;
+            config_clone.client_type = GClientConfigType::NpcControl(NpcControlConfig {
+                version: NC_PROTOCOL_VERSION.to_string(),
+            });
             let npc_control = NpcControlClient::connect(config_clone).await?;
             npc_control.login().await?;
 
@@ -136,11 +146,85 @@ impl RemoteControlClient {
         Ok(npc_control_guard.as_ref().unwrap().clone())
     }
 
-    /// Query the NPC server address from the RC server.
-    pub async fn query_nc_addr(&self) -> Result<Arc<dyn GPacket>, ClientError> {
+    /// Calls `get_npc_control()` and then runs the provided async closure on the result.
+    /// If the closure returns an error, the cached NPC control is cleared before returning
+    /// the error (internal).
+    async fn with_npc_control<T, F, Fut>(&self, f: F) -> Result<T, ClientError>
+    where
+        F: FnOnce(Arc<NpcControlClient>) -> Fut,
+        Fut: std::future::Future<Output = Result<T, ClientError>>,
+    {
+        // Retrieve the NPC control instance.
+        let npc_control = self.get_npc_control().await?;
+        // Execute the closure.
+        let result = f(npc_control).await;
+        // If an error occurs, clear the cached NPC control.
+        if result.is_err() {
+            log::warn!("Clearing NPC control client due to error");
+            let mut lock = self.npc_control.lock().await;
+            *lock = None;
+        }
+        result
+    }
+}
+
+impl RemoteControlClientTrait for RemoteControlClient {
+    async fn rc_query_nc_addr(&self) -> Result<Arc<dyn GPacket>, ClientError> {
         let query_packet = RcNcQuery::new("location");
-        self.client
-            .send_and_receive(Arc::new(query_packet), FromServerPacketId::NpcServerAddr)
+        self.send_and_receive(Arc::new(query_packet), FromServerPacketId::NpcServerAddr)
             .await
+    }
+}
+
+impl NpcControlClientTrait for RemoteControlClient {
+    async fn nc_get_weapon(&self, weapon_name: String) -> Result<Arc<dyn GPacket>, ClientError> {
+        self.with_npc_control(|npc| async move { npc.nc_get_weapon(weapon_name).await })
+            .await
+    }
+
+    async fn nc_add_weapon(
+        &self,
+        weapon_name: String,
+        weapon_img: String,
+        weapon_script: String,
+    ) -> Result<(), ClientError> {
+        self.with_npc_control(|npc| async move {
+            npc.nc_add_weapon(weapon_name, weapon_img, weapon_script)
+                .await
+        })
+        .await
+    }
+}
+
+impl GClientTrait for RemoteControlClient {
+    async fn disconnect(&self) {
+        self.client.disconnect().await
+    }
+
+    async fn send_and_receive(
+        &self,
+        packet: Arc<dyn GPacket + Send>,
+        response_packet: FromServerPacketId,
+    ) -> Result<Arc<dyn GPacket>, ClientError> {
+        self.client.send_and_receive(packet, response_packet).await
+    }
+
+    async fn send_packet(&self, packet: Arc<dyn GPacket + Send>) -> Result<(), ClientError> {
+        self.client.send_packet(packet).await
+    }
+
+    async fn register_event_handler<F, Fut>(
+        &self,
+        packet_id: crate::net::packet::PacketId,
+        handler: F,
+    ) where
+        F: Fn(crate::net::packet::PacketEvent) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.client.register_event_handler(packet_id, handler).await
+    }
+
+    async fn wait_for_tasks(&self) {
+        self.client.wait_for_tasks().await
     }
 }

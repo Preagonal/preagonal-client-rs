@@ -23,18 +23,38 @@ impl<R: Read> SyncGraalReader<R> {
         Ok(buffer)
     }
 
+    /// Read until EOF.
+    pub fn read_to_end(&mut self) -> Result<Vec<u8>, GraalIoError> {
+        let mut buffer = Vec::new();
+        self.inner.read_to_end(&mut buffer)?;
+        Ok(buffer)
+    }
+
+    /// Return a Vec<Vec<u8>> based on the delimiter, until EOF.
+    pub fn split_vec(&mut self, delimiter: u8) -> Result<Vec<Vec<u8>>, GraalIoError> {
+        let mut result = Vec::new();
+        loop {
+            let bytes = self.read_until(delimiter)?;
+            if bytes.is_empty() {
+                break;
+            }
+            result.push(bytes);
+        }
+        Ok(result)
+    }
+
     /// Reads until the specified delimiter is found (the delimiter is not included).
     pub fn read_until(&mut self, delimiter: u8) -> Result<Vec<u8>, GraalIoError> {
         let mut buffer = Vec::new();
         let bytes_read = self.inner.read_until(delimiter, &mut buffer)?;
         if bytes_read == 0 || buffer.last() != Some(&delimiter) {
-            return Err(GraalIoError::ByteNotFound(delimiter));
+            return Ok(buffer);
         }
         buffer.pop(); // remove the delimiter
         Ok(buffer)
     }
 
-    /// Reads a null-terminated string.
+    /// Reads a null-terminated string. If the string is not null-terminated, it will be read until EOF.
     pub fn read_string(&mut self) -> Result<(String, u32), GraalIoError> {
         let bytes = self.read_until(0)?;
         let s = bytes.iter().map(|&c| c as char).collect::<String>();

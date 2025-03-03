@@ -6,14 +6,14 @@ use serenity::all::{
 };
 use serenity::builder::CreateCommand;
 
-use crate::net::client::ClientError;
 use crate::net::client::rc::RemoteControlClient;
+use crate::net::client::{ClientError, GClientTrait};
 use crate::net::packet::from_client::rc_chat::RcChat;
 
 /// Sends a message to RC.
 pub async fn run(
     interaction: &CommandInteraction,
-    rc: Arc<RemoteControlClient>,
+    rc: Vec<Arc<RemoteControlClient>>,
 ) -> Result<CreateInteractionResponse, ClientError> {
     // Get the user who ran the interaction
     let nick = interaction.user.name.clone();
@@ -29,8 +29,10 @@ pub async fn run(
     });
 
     if let Some(msg) = message {
-        let chat_packet = RcChat::new(format!("{}: {}", nick, msg));
-        rc.client.send_packet(Arc::new(chat_packet)).await?;
+        for client in rc.iter() {
+            let chat_packet = RcChat::new(format!("{}: {}", nick, msg));
+            client.send_packet(Arc::new(chat_packet)).await?;
+        }
         return Ok(CreateInteractionResponse::Message(
             CreateInteractionResponseMessage::new().content("Message sent to RC"),
         ));

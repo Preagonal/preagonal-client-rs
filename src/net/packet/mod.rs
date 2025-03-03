@@ -6,6 +6,8 @@ use from_client::FromClientPacketId;
 use from_server::FromServerPacketId;
 use thiserror::Error;
 
+use crate::io::GraalIoError;
+
 /// Module containing packets for communication.
 pub mod from_client;
 
@@ -109,12 +111,29 @@ impl From<PacketId> for u64 {
     }
 }
 
+impl From<PacketId> for usize {
+    fn from(packet: PacketId) -> usize {
+        match packet {
+            PacketId::FromClient(id) => id.into(),
+            PacketId::FromServer(id) => id.into(),
+        }
+    }
+}
+
 /// Enum representing an error when parsing a packet.
 #[derive(Debug, Error)]
 pub enum PacketConversionError {
+    /// GraalIoError
+    #[error("GraalIo error: {0}")]
+    GraalIo(#[from] GraalIoError),
+
     /// Error for an invalid packet id.
     #[error("Invalid packet id: {0}")]
     InvalidId(u8),
+
+    /// Other error.
+    #[error("Other error: {0}")]
+    Other(String),
 }
 
 /// Trait representing a packet for communication.
@@ -200,6 +219,13 @@ macro_rules! define_packets {
             }
         }
 
+        // Implement `From<$enum_name>` for `usize`.
+        impl From<$enum_name> for usize {
+            fn from(packet: $enum_name) -> usize {
+                packet as usize
+            }
+        }
+
         // Implement `Display` for the enum.
         impl std::fmt::Display for $enum_name {
             /// Converts the enum to a human-readable string.
@@ -256,6 +282,19 @@ macro_rules! define_packets {
             type Error = $crate::net::packet::PacketConversionError;
 
             fn try_from(value: u64) -> Result<Self, Self::Error> {
+                match value as u8 {
+                    $(
+                        $value => Ok($enum_name::$variant),
+                    )*
+                    _ => Err($crate::net::packet::PacketConversionError::InvalidId(value as u8)),
+                }
+            }
+        }
+
+        impl TryFrom<usize> for $enum_name {
+            type Error = $crate::net::packet::PacketConversionError;
+
+            fn try_from(value: usize) -> Result<Self, Self::Error> {
                 match value as u8 {
                     $(
                         $value => Ok($enum_name::$variant),

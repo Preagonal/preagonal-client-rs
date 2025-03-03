@@ -183,11 +183,10 @@ impl<'a, 'b> ser::Serializer for &'a mut Serializer<'b> {
                 let gscript: &GScript = unsafe { &*(value as *const T as *const GScript) };
 
                 // Replace \r with "" and \n with "\xa7"
-                let mut script: Vec<u8> = gscript.0.as_bytes().to_vec();
+                let script = gscript.0.replace("\r", "");
+                let mut script: Vec<u8> = script.as_bytes().to_vec();
                 for i in &mut script {
-                    if *i == b'\r' {
-                        *i = b' ';
-                    } else if *i == b'\n' {
+                    if *i == b'\n' {
                         *i = 0xa7;
                     }
                 }

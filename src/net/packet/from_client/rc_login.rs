@@ -48,7 +48,7 @@ impl RcLogin {
 
 impl GPacket for RcLogin {
     fn id(&self) -> PacketId {
-        PacketId::FromClient(FromClientPacketId::RcLogin)
+        PacketId::FromClient(FromClientPacketId::V5Login)
     }
 
     fn data(&self) -> Vec<u8> {
