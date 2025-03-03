@@ -264,8 +264,10 @@ pub async fn create_game_client(client: config::ClientConfig) -> Arc<GameClient>
         client_type: GClientConfigType::Game(GameClientConfig {
             version: GAME_PROTOCOL_VERSION.to_string(),
             encryption_keys: EncryptionKeys {
-                rsa_private_key: Box::new(RsaPrivateKey::from_pkcs8_pem(GAME_CLIENT_PRIVATE_KEY)
-                    .expect("Error loading RSA private key")),
+                rsa_private_key: Box::new(
+                    RsaPrivateKey::from_pkcs8_pem(GAME_CLIENT_PRIVATE_KEY)
+                        .expect("Error loading RSA private key"),
+                ),
             },
             header_format: GProtocolV6HeaderFormat::try_from("EILLLT")
                 .expect("Error parsing header format"),
