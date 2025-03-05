@@ -25,4 +25,4 @@ client_type = { Game = { version = "G3D2204D", header_format = "EILLLT", encrypt
 -----END PRIVATE KEY-----
 """ } } }
 # The login information
-login = { nick = "GB", auth = { account_name = "[CHANGEME]", [CHANGEME] = "FpVSNcSZ", identification = ["win", "[CHANGEME]", "[CHANGEME]", "[CHANGEME]"] } }
+login = { nick = "GB", auth = { account_name = "[CHANGEME]", "password" = "[CHANGEME]", identification = ["win", "[CHANGEME]", "[CHANGEME]", "[CHANGEME]"] } }
