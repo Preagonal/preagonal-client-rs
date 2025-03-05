@@ -9,12 +9,15 @@ use tokio::{
     time::timeout,
 };
 
-use crate::net::{
-    packet::{GPacket, PacketEvent, PacketId, from_server::FromServerPacketId},
-    protocol::{GProtocolEnum, Protocol},
+use crate::{
+    config::ClientConfig,
+    net::{
+        packet::{GPacket, PacketEvent, PacketId, from_server::FromServerPacketId},
+        protocol::{GProtocolEnum, Protocol},
+    },
 };
 
-use super::{ClientError, GClientConfig, GClientTrait};
+use super::{ClientError, GClientTrait};
 
 /// An asynchronous event handler function that receives a PacketEvent.
 type EventHandlerFn = dyn Fn(PacketEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync;
@@ -31,7 +34,7 @@ pub struct GClient {
     /// Mapping from PacketId to registered event handlers.
     event_handlers: Arc<Mutex<HashMap<PacketId, Vec<Arc<EventHandlerFn>>>>>,
     /// Client configuration.
-    config: GClientConfig,
+    config: ClientConfig,
     /// Shutdown notifier for GClient tasks.
     shutdown: Arc<Notify>,
     /// JoinSet for background tasks.
@@ -44,7 +47,7 @@ impl GClient {
     /// This spawns background tasks for reading and sending packets,
     /// and returns an Arc-wrapped GClient.
     pub async fn connect(
-        config: GClientConfig,
+        config: &ClientConfig,
         protocol: GProtocolEnum<BufReader<OwnedReadHalf>, OwnedWriteHalf>,
     ) -> Result<Arc<Self>, ClientError> {
         let protocol = Arc::new(protocol);
@@ -81,7 +84,7 @@ impl GClient {
             protocol: Arc::clone(&protocol),
             pending_requests: Arc::clone(&pending_requests),
             event_handlers: Arc::clone(&event_handlers),
-            config,
+            config: config.clone(),
             shutdown: Arc::clone(&shutdown),
             join_set: Arc::clone(&join_set),
         });

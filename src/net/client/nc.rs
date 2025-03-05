@@ -2,21 +2,26 @@ use std::sync::Arc;
 
 use tokio::{io::BufReader, net::TcpStream};
 
-use crate::net::{
-    client::GClientTrait,
-    packet::{
-        GPacket,
-        from_client::{nc_login::NcLogin, nc_weapon_add::NcWeaponAdd, nc_weapon_get::NcWeaponGet},
-        from_server::FromServerPacketId,
+use crate::{
+    config::{ClientConfig, ClientType, NpcControlConfig},
+    net::{
+        client::GClientTrait,
+        packet::{
+            GPacket,
+            from_client::{
+                nc_login::NcLogin, nc_weapon_add::NcWeaponAdd, nc_weapon_get::NcWeaponGet,
+            },
+            from_server::FromServerPacketId,
+        },
+        protocol::{GProtocolEnum, proto_v4::GProtocolV4},
     },
-    protocol::{GProtocolEnum, proto_v4::GProtocolV4},
 };
 
-use super::{ClientError, GClientConfig, GClientConfigType, NpcControlConfig, gclient::GClient};
+use super::{ClientError, gclient::GClient};
 
 /// A struct that contains the NpcControlClient.
 pub struct NpcControlClient {
-    config: GClientConfig,
+    config: ClientConfig,
     nc_specific_config: NpcControlConfig,
     /// The internal client.
     pub client: Arc<GClient>,
@@ -40,18 +45,19 @@ pub trait NpcControlClientTrait {
 
 impl NpcControlClient {
     /// Connect to the server.
-    pub async fn connect(config: GClientConfig) -> Result<Arc<Self>, ClientError> {
-        let cloned_config = config.clone();
-        let addr = format!("{}:{}", cloned_config.host, cloned_config.port);
+    pub async fn connect(config: &ClientConfig) -> Result<Arc<Self>, ClientError> {
+        let host = &config.host;
+        let port = config.port;
+        let addr = format!("{}:{}", host, port);
         let stream = TcpStream::connect(&addr).await?;
         let (read_half, write_half) = stream.into_split();
         let reader = BufReader::new(read_half);
 
         let protocol = GProtocolEnum::V4(GProtocolV4::new(reader, write_half));
-        let client = GClient::connect(cloned_config, protocol).await?;
+        let client = GClient::connect(config, protocol).await?;
 
         let nc_specific_config = match &config.client_type {
-            GClientConfigType::NpcControl(nc_config) => nc_config,
+            ClientType::NpcControl(nc_config) => nc_config,
             _ => return Err(ClientError::UnsupportedProtocolVersion),
         };
 
@@ -66,8 +72,8 @@ impl NpcControlClient {
     pub async fn login(&self) -> Result<(), ClientError> {
         let login_packet = NcLogin::new(
             self.nc_specific_config.version.clone(),
-            self.config.login.username.clone(),
-            self.config.login.password.clone(),
+            self.config.login.auth.account_name.clone(),
+            self.config.login.auth.password.clone(),
         );
         {
             log::debug!("Sending v4 login packet: {:?}", login_packet);

@@ -3,9 +3,9 @@ use std::sync::Arc;
 use tokio::{io::BufReader, net::TcpStream, sync::Mutex, time::Instant};
 
 use crate::{
-    consts::NC_PROTOCOL_VERSION,
+    config::{ClientConfig, ClientType, RemoteControlConfig},
     net::{
-        client::{GClientTrait, NpcControlConfig},
+        client::GClientTrait,
         packet::{
             GPacket,
             from_client::{nc_query::RcNcQuery, rc_login::RcLogin},
@@ -16,14 +16,14 @@ use crate::{
 };
 
 use super::{
-    ClientError, GClientConfig, GClientConfigType, RemoteControlConfig,
+    ClientError,
     gclient::GClient,
     nc::{NpcControlClient, NpcControlClientTrait},
 };
 
 /// A struct that contains the RemoteControlClient.
 pub struct RemoteControlClient {
-    config: GClientConfig,
+    config: ClientConfig,
     rc_specific_config: RemoteControlConfig,
     /// The internal client.
     pub client: Arc<GClient>,
@@ -39,18 +39,19 @@ pub trait RemoteControlClientTrait {
 
 impl RemoteControlClient {
     /// Connect to the server.
-    pub async fn connect(config: GClientConfig) -> Result<Arc<Self>, ClientError> {
-        let cloned_config = config.clone();
-        let addr = format!("{}:{}", cloned_config.host, cloned_config.port);
+    pub async fn connect(config: &ClientConfig) -> Result<Arc<Self>, ClientError> {
+        let host = &config.host;
+        let port = config.port;
+        let addr = format!("{}:{}", host, port);
         let stream = TcpStream::connect(&addr).await?;
         let (read_half, write_half) = stream.into_split();
         let reader = BufReader::new(read_half);
 
         let protocol = GProtocolEnum::V5(GProtocolV5::new(reader, write_half));
-        let client = GClient::connect(cloned_config, protocol).await?;
+        let client = GClient::connect(config, protocol).await?;
 
         let rc_specific_config = match &config.client_type {
-            GClientConfigType::RemoteControl(rc_config) => rc_config,
+            ClientType::RemoteControl(rc_config) => rc_config,
             _ => return Err(ClientError::UnsupportedProtocolVersion),
         };
 
@@ -93,9 +94,9 @@ impl RemoteControlClient {
         let login_packet = RcLogin::new(
             v5_code,
             self.rc_specific_config.version.clone(),
-            self.config.login.username.clone(),
-            self.config.login.password.clone(),
-            self.config.login.identification.clone(),
+            self.config.login.auth.account_name.clone(),
+            self.config.login.auth.password.clone(),
+            self.config.login.auth.identification.clone(),
         );
         {
             log::debug!("Sending v5 login packet: {:?}", login_packet);
@@ -107,6 +108,12 @@ impl RemoteControlClient {
 
     /// Get the NPC control client (internal).
     async fn get_npc_control(&self) -> Result<Arc<NpcControlClient>, ClientError> {
+        log::debug!("Checking if NPC control is set in config");
+        let npc_control = self
+            .rc_specific_config
+            .npc_control
+            .as_ref()
+            .ok_or(ClientError::NcNotEnabled)?;
         log::debug!("Checking for existing NpcControlClient");
         let mut npc_control_guard = self.npc_control.lock().await;
         if npc_control_guard.is_none() {
@@ -133,10 +140,8 @@ impl RemoteControlClient {
 
             config_clone.host = npc_host.to_string();
             config_clone.port = npc_port;
-            config_clone.client_type = GClientConfigType::NpcControl(NpcControlConfig {
-                version: NC_PROTOCOL_VERSION.to_string(),
-            });
-            let npc_control = NpcControlClient::connect(config_clone).await?;
+            config_clone.client_type = ClientType::NpcControl(npc_control.clone());
+            let npc_control = NpcControlClient::connect(&config_clone).await?;
             npc_control.login().await?;
 
             *npc_control_guard = Some(npc_control);

@@ -1,19 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
-use consts::{GAME_CLIENT_PRIVATE_KEY, GAME_PROTOCOL_VERSION, RC_PROTOCOL_VERSION};
+use config::{ClientConfig, ClientType};
 use discord::commands::{add_weapon, get_weapon, sendtorc};
 use net::{
-    client::{
-        GClientConfig, GClientConfigType, GClientLoginConfig, GClientTrait, GameClientConfig,
-        RemoteControlConfig, game::GameClient, rc::RemoteControlClient,
-    },
+    client::{GClientTrait, game::GameClient, rc::RemoteControlClient},
     packet::{
         PacketId,
         from_server::{FromServerPacketId, weapon_script::NpcWeaponScript},
     },
-    protocol::{proto_v6::EncryptionKeys, proto_v6_header::GProtocolV6HeaderFormat},
 };
-use rsa::{RsaPrivateKey, pkcs8::DecodePrivateKey};
+
 use serenity::{
     Client,
     all::{
@@ -189,13 +185,16 @@ async fn main() {
 
     for server in &config.clients {
         match server.client_type {
-            config::ClientType::Game => {
-                let client = create_game_client(server.clone()).await;
+            ClientType::Game(_) => {
+                let client = create_game_client(server).await;
                 game_clients.push(client);
             }
-            config::ClientType::RemoteControl => {
-                let rc = create_rc_client(server.clone()).await;
+            ClientType::RemoteControl(_) => {
+                let rc = create_rc_client(server).await;
                 rc_clients.push(rc);
+            }
+            ClientType::NpcControl(_) => {
+                log::warn!("Unsupported client type: NpcControl");
             }
         }
         // sleep for 5 seconds to avoid spamming the server
@@ -242,7 +241,7 @@ async fn main() {
 }
 
 /// Create a GameClient
-pub async fn create_game_client(client: config::ClientConfig) -> Arc<GameClient> {
+pub async fn create_game_client(client: &ClientConfig) -> Arc<GameClient> {
     let login = client.login.clone();
 
     log::info!(
@@ -252,29 +251,7 @@ pub async fn create_game_client(client: config::ClientConfig) -> Arc<GameClient>
         login.auth.account_name
     );
 
-    let client_config = GClientConfig {
-        host: client.host,
-        port: client.port,
-        login: GClientLoginConfig {
-            username: login.auth.account_name,
-            password: login.auth.password,
-            identification: login.identification,
-        },
-        timeout: Duration::from_secs(5),
-        client_type: GClientConfigType::Game(GameClientConfig {
-            version: GAME_PROTOCOL_VERSION.to_string(),
-            encryption_keys: EncryptionKeys {
-                rsa_private_key: Box::new(
-                    RsaPrivateKey::from_pkcs8_pem(GAME_CLIENT_PRIVATE_KEY)
-                        .expect("Error loading RSA private key"),
-                ),
-            },
-            header_format: GProtocolV6HeaderFormat::try_from("EILLLT")
-                .expect("Error parsing header format"),
-        }),
-    };
-
-    let client = GameClient::connect(client_config)
+    let client = GameClient::connect(client)
         .await
         .expect("Error connecting to server");
 
@@ -284,7 +261,7 @@ pub async fn create_game_client(client: config::ClientConfig) -> Arc<GameClient>
 }
 
 /// Create a RemoteControlClient
-pub async fn create_rc_client(client: config::ClientConfig) -> Arc<RemoteControlClient> {
+pub async fn create_rc_client(client: &ClientConfig) -> Arc<RemoteControlClient> {
     let login = client.login.clone();
 
     log::info!(
@@ -294,22 +271,7 @@ pub async fn create_rc_client(client: config::ClientConfig) -> Arc<RemoteControl
         login.auth.account_name
     );
 
-    let client_config = GClientConfig {
-        host: client.host,
-        port: client.port,
-        login: GClientLoginConfig {
-            username: login.auth.account_name,
-            password: login.auth.password,
-            identification: login.identification,
-        },
-        timeout: Duration::from_secs(5),
-        client_type: GClientConfigType::RemoteControl(RemoteControlConfig {
-            version: RC_PROTOCOL_VERSION.to_string(),
-            nc_auto_disconnect: Duration::from_secs(60),
-        }),
-    };
-
-    let rc = RemoteControlClient::connect(client_config)
+    let rc = RemoteControlClient::connect(client)
         .await
         .expect("Error connecting to server");
 

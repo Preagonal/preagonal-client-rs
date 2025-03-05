@@ -2,18 +2,21 @@ use std::sync::Arc;
 
 use tokio::{io::BufReader, net::TcpStream};
 
-use crate::net::{
-    client::GClientTrait,
-    packet::{GPacket, from_client::game_login::GameLogin, from_server::FromServerPacketId},
-    protocol::{GProtocolEnum, proto_v6::GProtocolV6},
+use crate::{
+    config::{ClientConfig, ClientType, GameConfig},
+    net::{
+        client::GClientTrait,
+        packet::{GPacket, from_client::game_login::GameLogin, from_server::FromServerPacketId},
+        protocol::{GProtocolEnum, proto_v6::GProtocolV6},
+    },
 };
 
-use super::{ClientError, GClientConfig, GClientConfigType, GameClientConfig, gclient::GClient};
+use super::{ClientError, gclient::GClient};
 
 /// A struct that contains the GameClient.
 pub struct GameClient {
-    config: GClientConfig,
-    game_specific_config: GameClientConfig,
+    config: ClientConfig,
+    game_specific_config: GameConfig,
     /// The internal client.
     pub client: Arc<GClient>,
 }
@@ -23,15 +26,16 @@ pub trait GameClientTrait {}
 
 impl GameClient {
     /// Connect to the server.
-    pub async fn connect(config: GClientConfig) -> Result<Arc<Self>, ClientError> {
-        let cloned_config = config.clone();
-        let addr = format!("{}:{}", cloned_config.host, cloned_config.port);
+    pub async fn connect(config: &ClientConfig) -> Result<Arc<Self>, ClientError> {
+        let host = &config.host;
+        let port = config.port;
+        let addr = format!("{}:{}", host, port);
         let stream = TcpStream::connect(&addr).await?;
         let (read_half, write_half) = stream.into_split();
         let reader = BufReader::new(read_half);
 
         let game_specific_config = match &config.client_type {
-            GClientConfigType::Game(config) => config,
+            ClientType::Game(config) => config,
             _ => return Err(ClientError::UnsupportedProtocolVersion),
         };
 
@@ -41,7 +45,7 @@ impl GameClient {
             game_specific_config.header_format.clone(),
             game_specific_config.encryption_keys.clone(),
         ));
-        let client = GClient::connect(cloned_config, protocol).await?;
+        let client = GClient::connect(config, protocol).await?;
 
         Ok(Arc::new(Self {
             config: config.clone(),
@@ -54,9 +58,9 @@ impl GameClient {
     pub async fn login(&self) -> Result<(), ClientError> {
         let login_packet = GameLogin::new(
             self.game_specific_config.version.clone(),
-            self.config.login.username.clone(),
-            self.config.login.password.clone(),
-            self.config.login.identification.clone(),
+            self.config.login.auth.account_name.clone(),
+            self.config.login.auth.password.clone(),
+            self.config.login.auth.identification.clone(),
         );
         {
             log::debug!("Sending v6 login packet: {:?}", login_packet);

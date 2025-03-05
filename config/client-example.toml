@@ -1,33 +1,28 @@
-[[servers]]
+[discord]
+token = "[CHANGEME]"
+channel_id = "[CHANGEME]"
+server_id = "[CHANGEME]"
+
+[[clients]]
 # The server IP
 host = "[CHANGEME]"
 # The server port
+port = 12345
+# The client type
+client_type = { RemoteControl = { version = "GSERV025", npc_control = { version = "NCL21075" } } }
+# The login information
+login = { auth = { account_name = "[CHANGEME]", password = "[CHANGEME]", identification = ["win", "[CHANGEME]", "[CHANGEME]", "[CHANGEME]"] } }
+
+[[clients]]
+# The server IP
+host = "198.27.86.142"
+# The server port
 port = 14801
-
-[servers.login]
-# The nickname of the client that joins the server
-nick = "[CHANGEME]"
-
-# The version used in the login packet
-version = "GSERV025"
-
-# These are IDs used to identify the user's client, for security purposes. The RC client
-# actually uses three such identifiers, and I believe the format is usually 3 16-byte
-# values formatted as ASCII hex. The format is basically the same as MD5 hashes.
-identification = ["win", "[CHANGEME]", "[CHANGEME]", "[CHANGEME]"]
-
-# The account username (e.g. Graal123456)
-auth.account_name = "[CHANGEME]"
-
-# The password
-auth.password = "[CHANGEME]"
-
-[servers.discord]
-# Discord auth token
-token = "[CHANGEME]"
-
-# Discord Channel ID
-channel_id = "[CHANGEME]"
-
-# Discord Server ID
-server_id = "[CHANGEME]"
+# The client type
+client_type = { Game = { version = "G3D2204D", header_format = "EILLLT", encryption_keys = { rsa_private_key = """
+-----BEGIN PRIVATE KEY-----
+[CHANGEME]
+-----END PRIVATE KEY-----
+""" } } }
+# The login information
+login = { nick = "GB", auth = { account_name = "[CHANGEME]", [CHANGEME] = "FpVSNcSZ", identification = ["win", "[CHANGEME]", "[CHANGEME]", "[CHANGEME]"] } }

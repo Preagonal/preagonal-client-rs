@@ -1,11 +1,12 @@
 use rc4::StreamCipher;
 use rc4::{KeyInit, Rc4, consts::U16};
-use rsa::{Pkcs1v15Encrypt, RsaPrivateKey};
+use rsa::Pkcs1v15Encrypt;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::{collections::VecDeque, sync::Arc};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 
+use crate::config::EncryptionKeys;
 use crate::consts::V6_PROTOCOL_STRING;
 use crate::io::io_async::{AsyncGraalReader, AsyncGraalWriter};
 use crate::io::io_vec::IntoSyncGraalReaderRef;
@@ -15,14 +16,6 @@ use crate::net::protocol::proto_v6_header::{GCompressionTypeV6, PacketDirection}
 use crate::utils::{compress_zlib, decompress_bzip2, decompress_zlib};
 
 use super::proto_v6_header::{GProtocolV6HeaderFormat, GProtocolV6PacketHeader};
-
-/// Encryption keys provided by the caller.
-#[derive(Debug, Clone)]
-pub struct EncryptionKeys {
-    /// The private key.
-    pub rsa_private_key: Box<RsaPrivateKey>,
-    // TODO: The public key.
-}
 
 /// GProtocolV6 implements the unified protocol. It holds its own asynchronous reader,
 /// writer, and a packet queue. It also maintains state for header format, encryption keys,
