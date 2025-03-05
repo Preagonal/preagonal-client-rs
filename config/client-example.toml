@@ -15,9 +15,9 @@ login = { auth = { account_name = "[CHANGEME]", password = "[CHANGEME]", identif
 
 [[clients]]
 # The server IP
-host = "198.27.86.142"
+host = "[CHANGEME]"
 # The server port
-port = 14801
+port = 12345
 # The client type
 client_type = { Game = { version = "G3D2204D", header_format = "EILLLT", encryption_keys = { rsa_private_key = """
 -----BEGIN PRIVATE KEY-----
