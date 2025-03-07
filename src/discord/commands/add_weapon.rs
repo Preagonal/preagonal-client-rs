@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use serenity::all::{
-    CommandInteraction, CommandOptionType, CreateCommandOption, CreateInteractionResponse,
-    CreateInteractionResponseMessage, ResolvedValue,
+    CommandInteraction, CommandOptionType, CreateAttachment, CreateCommandOption,
+    CreateInteractionResponseFollowup, ResolvedValue,
 };
 use serenity::builder::CreateCommand;
 
@@ -14,37 +14,29 @@ use crate::net::client::rc::RemoteControlClient;
 pub async fn run(
     interaction: &CommandInteraction,
     rc: Vec<Arc<RemoteControlClient>>,
-) -> Result<CreateInteractionResponse, ClientError> {
+) -> Result<CreateInteractionResponseFollowup, ClientError> {
     // Get the right option
     let options = interaction.data.options();
     let weapon = if let Some(option) = options.iter().find(|o| o.name == "weapon") {
         if let ResolvedValue::String(msg) = option.value {
             msg.to_string()
         } else {
-            return Ok(CreateInteractionResponse::Message(
-                CreateInteractionResponseMessage::new()
-                    .content("Weapon parameter is not a valid string."),
-            ));
+            return Ok(CreateInteractionResponseFollowup::new()
+                .content("Weapon parameter is not a valid string."));
         }
     } else {
-        return Ok(CreateInteractionResponse::Message(
-            CreateInteractionResponseMessage::new().content("No `weapon` parameter found."),
-        ));
+        return Ok(CreateInteractionResponseFollowup::new().content("No `weapon` parameter found."));
     };
 
     let script = if let Some(option) = options.iter().find(|o| o.name == "script") {
         if let ResolvedValue::Attachment(attachment) = option.value {
             &attachment.url
         } else {
-            return Ok(CreateInteractionResponse::Message(
-                CreateInteractionResponseMessage::new()
-                    .content("Script parameter is not a valid attachment."),
-            ));
+            return Ok(CreateInteractionResponseFollowup::new()
+                .content("Script parameter is not a valid attachment."));
         }
     } else {
-        return Ok(CreateInteractionResponse::Message(
-            CreateInteractionResponseMessage::new().content("No `script` parameter found."),
-        ));
+        return Ok(CreateInteractionResponseFollowup::new().content("No `script` parameter found."));
     };
 
     // Download the script using reqwest
@@ -52,24 +44,19 @@ pub async fn run(
         Ok(response) => match response.bytes().await {
             Ok(bytes) => match String::from_utf8(bytes.to_vec()) {
                 Ok(string) => string,
-                Err(_) => {
-                    return Ok(CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new()
-                            .content("Failed to convert script to a UTF-8 string."),
-                    ));
+                Err(e) => {
+                    return Ok(CreateInteractionResponseFollowup::new()
+                        .content(format!("Failed to get script string:\n```{:?}```", e)));
                 }
             },
-            Err(_) => {
-                return Ok(CreateInteractionResponse::Message(
-                    CreateInteractionResponseMessage::new()
-                        .content("Failed to download script bytes."),
-                ));
+            Err(e) => {
+                return Ok(CreateInteractionResponseFollowup::new()
+                    .content(format!("Failed to get script bytes:\n```{:?}```", e)));
             }
         },
-        Err(_) => {
-            return Ok(CreateInteractionResponse::Message(
-                CreateInteractionResponseMessage::new().content("Failed to download script."),
-            ));
+        Err(e) => {
+            return Ok(CreateInteractionResponseFollowup::new()
+                .content(format!("Failed to get script:\n```{:?}```", e)));
         }
     };
 
@@ -83,9 +70,10 @@ pub async fn run(
             .await?;
     }
 
-    Ok(CreateInteractionResponse::Message(
-        CreateInteractionResponseMessage::new().content(format!("Weapon {} added. In order to get the weapon bytecode, ensure that:\n* The client has the weapon added\n* `//#CLIENTSIDE` is added to the beginning of the script.\n* The weapon has been changed, to trigger the client to get the new weapon.", weapon)),
-    ))
+    Ok(CreateInteractionResponseFollowup::new()
+        .content(format!("Weapon `{}` added. In order to get the weapon bytecode, ensure that:\n* The client has the weapon added\n* `//#CLIENTSIDE` is added to the beginning of the script.\n* The weapon has been changed, to trigger the client to get the new weapon.", weapon))
+        .add_file(CreateAttachment::bytes(script.as_bytes(), format!("{}.gs2", weapon)))
+    )
 }
 
 /// Registers the command.

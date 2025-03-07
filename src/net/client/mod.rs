@@ -17,7 +17,9 @@ pub mod nc;
 /// This module defines the RemoteControl.
 pub mod rc;
 
-use super::packet::{PacketEvent, PacketId, from_server::FromServerPacketId};
+use super::packet::{
+    PacketConversionError, PacketEvent, PacketId, from_server::FromServerPacketId,
+};
 
 #[derive(Debug, Error)]
 /// Error type for the Rc protocol.
@@ -49,6 +51,10 @@ pub enum ClientError {
     /// Unsupported protocol version.
     #[error("NPC Control is not enabled in the config")]
     NcNotEnabled,
+
+    /// Packet conversion error.
+    #[error("Packet conversion error: {0}")]
+    PacketConversionError(#[from] PacketConversionError),
 
     /// Other
     #[error("Other error: {0}")]

@@ -2,6 +2,8 @@
 
 use crate::define_packets;
 
+/// Get weapon from NC
+pub mod nc_weapon_get;
 /// Weapon script packet.
 pub mod weapon_script;
 

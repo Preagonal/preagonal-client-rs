@@ -11,7 +11,7 @@ use crate::{
             from_client::{
                 nc_login::NcLogin, nc_weapon_add::NcWeaponAdd, nc_weapon_get::NcWeaponGet,
             },
-            from_server::FromServerPacketId,
+            from_server::{FromServerPacketId, nc_weapon_get::NcWeaponGetImpl},
         },
         protocol::{GProtocolEnum, proto_v4::GProtocolV4},
     },
@@ -33,7 +33,7 @@ pub trait NpcControlClientTrait {
     fn nc_get_weapon(
         &self,
         weapon_name: String,
-    ) -> impl Future<Output = Result<Arc<dyn GPacket>, ClientError>>;
+    ) -> impl Future<Output = Result<NcWeaponGetImpl, ClientError>>;
     /// Create a weapon.
     fn nc_add_weapon(
         &self,
@@ -85,11 +85,13 @@ impl NpcControlClient {
 
 impl NpcControlClientTrait for NpcControlClient {
     /// Query NC weapon.
-    async fn nc_get_weapon(&self, weapon_name: String) -> Result<Arc<dyn GPacket>, ClientError> {
+    async fn nc_get_weapon(&self, weapon_name: String) -> Result<NcWeaponGetImpl, ClientError> {
         let get_weapon_packet = NcWeaponGet::new(weapon_name);
-        self.client
-            .send_and_receive(Arc::new(get_weapon_packet), FromServerPacketId::NcWeaponGet)
-            .await
+        Ok(NcWeaponGetImpl::try_from(
+            self.client
+                .send_and_receive(Arc::new(get_weapon_packet), FromServerPacketId::NcWeaponGet)
+                .await?,
+        )?)
     }
 
     /// Create a weapon.

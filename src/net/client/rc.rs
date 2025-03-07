@@ -9,7 +9,7 @@ use crate::{
         packet::{
             GPacket,
             from_client::{nc_query::RcNcQuery, rc_login::RcLogin},
-            from_server::FromServerPacketId,
+            from_server::{FromServerPacketId, nc_weapon_get::NcWeaponGetImpl},
         },
         protocol::{GProtocolEnum, proto_v5::GProtocolV5},
     },
@@ -182,7 +182,7 @@ impl RemoteControlClientTrait for RemoteControlClient {
 }
 
 impl NpcControlClientTrait for RemoteControlClient {
-    async fn nc_get_weapon(&self, weapon_name: String) -> Result<Arc<dyn GPacket>, ClientError> {
+    async fn nc_get_weapon(&self, weapon_name: String) -> Result<NcWeaponGetImpl, ClientError> {
         self.with_npc_control(|npc| async move { npc.nc_get_weapon(weapon_name).await })
             .await
     }

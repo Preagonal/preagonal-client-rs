@@ -13,8 +13,8 @@ use net::{
 use serenity::{
     Client,
     all::{
-        ChannelId, CreateAttachment, CreateInteractionResponse, CreateInteractionResponseMessage,
-        CreateMessage, GuildId, Interaction, Ready,
+        ChannelId, CreateAttachment, CreateInteractionResponse, CreateInteractionResponseFollowup,
+        CreateInteractionResponseMessage, CreateMessage, GuildId, Interaction, Ready,
     },
     async_trait,
     prelude::*,
@@ -44,37 +44,49 @@ struct Handler {
 impl EventHandler for Handler {
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::Command(command) = interaction {
+            // Defer the response
+            let err = command
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Defer(
+                        CreateInteractionResponseMessage::new()
+                            .content("Waiting for command completion..."),
+                    ),
+                )
+                .await;
+
+            if let Err(why) = err {
+                log::error!("Error creating interaction response: {:?}", why);
+                return;
+            }
+
             let response = match command.data.name.as_str() {
                 "send_to_rc" => sendtorc::run(&command, self.rc_clients.clone()).await,
                 "get_weapon" => get_weapon::run(&command, self.rc_clients.clone()).await,
                 "add_weapon" => add_weapon::run(&command, self.rc_clients.clone()).await,
                 _ => {
                     log::warn!("No command found: {}", command.data.name);
-                    Ok(CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new().content("No command found"),
-                    ))
+                    Ok(CreateInteractionResponseFollowup::new()
+                        .content(format!("Command `{}` not found.", command.data.name)))
                 }
             };
 
             if let Err(why) = response {
                 log::error!("Error running command: {:?}", why);
                 command
-                    .create_response(
+                    .create_followup(
                         &ctx.http,
-                        CreateInteractionResponse::Message(
-                            CreateInteractionResponseMessage::new()
-                                .content(format!("Error running command: {:?}", why)),
-                        ),
+                        CreateInteractionResponseFollowup::new()
+                            .content(format!("Error running command:\n```{:?}```", why)),
                     )
                     .await
                     .expect("Error sending error response");
                 return;
             }
 
-            if let Err(why) = command.create_response(&ctx.http, response.unwrap()).await {
-                log::error!("Error responding to Discord command: {:?}", why);
+            if let Err(why) = command.create_followup(&ctx.http, response.unwrap()).await {
+                log::error!("Error creating interaction response: {:?}", why);
             }
-            return;
         }
     }
 

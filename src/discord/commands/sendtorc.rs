@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use serenity::all::{
-    CommandInteraction, CommandOptionType, CreateCommandOption, CreateInteractionResponse,
-    CreateInteractionResponseMessage, ResolvedValue,
+    CommandInteraction, CommandOptionType, CreateCommandOption, CreateInteractionResponseFollowup,
+    ResolvedValue,
 };
 use serenity::builder::CreateCommand;
 
@@ -14,9 +14,9 @@ use crate::net::packet::from_client::rc_chat::RcChat;
 pub async fn run(
     interaction: &CommandInteraction,
     rc: Vec<Arc<RemoteControlClient>>,
-) -> Result<CreateInteractionResponse, ClientError> {
+) -> Result<CreateInteractionResponseFollowup, ClientError> {
     // Get the user who ran the interaction
-    let nick = interaction.user.name.clone();
+    let nick = &interaction.user.name;
 
     // Get the right option
     let options = interaction.data.options();
@@ -33,13 +33,11 @@ pub async fn run(
             let chat_packet = RcChat::new(format!("{}: {}", nick, msg));
             client.send_packet(Arc::new(chat_packet)).await?;
         }
-        return Ok(CreateInteractionResponse::Message(
-            CreateInteractionResponseMessage::new().content("Message sent to RC"),
-        ));
+        return Ok(
+            CreateInteractionResponseFollowup::new().content("Message sent to RemoteControl.")
+        );
     }
-    Ok(CreateInteractionResponse::Message(
-        CreateInteractionResponseMessage::new().content("No message found"),
-    ))
+    Ok(CreateInteractionResponseFollowup::new().content("No `message` parameter found."))
 }
 
 /// Registers the command.
