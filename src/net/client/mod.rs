@@ -56,6 +56,10 @@ pub enum ClientError {
     #[error("Packet conversion error: {0}")]
     PacketConversionError(#[from] PacketConversionError),
 
+    /// Client not connected.
+    #[error("Client not connected")]
+    ClientNotConnected,
+
     /// Other
     #[error("Other error: {0}")]
     Other(String),
@@ -66,7 +70,7 @@ pub trait GClientTrait {
     // we won't put that in the trait.
 
     /// Disconnect from the server.
-    fn disconnect(&self) -> impl Future<Output = ()> + Send;
+    fn disconnect(&self) -> impl Future<Output = Result<(), ClientError>> + Send;
 
     /// Send a packet, and wait for a response.
     fn send_and_receive(
@@ -86,11 +90,20 @@ pub trait GClientTrait {
         &self,
         packet_id: PacketId,
         handler: F,
-    ) -> impl Future<Output = ()> + Send + '_
+    ) -> impl Future<Output = Result<(), ClientError>> + Send + '_
     where
         F: Fn(PacketEvent) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static;
 
+    /// Register disconnect handler.
+    fn register_disconnect_handler<F, Fut>(
+        &self,
+        handler: F,
+    ) -> impl Future<Output = Result<(), ClientError>> + Send + '_
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static;
+
     /// Wait for tasks to finish.
-    fn wait_for_tasks(&self) -> impl Future<Output = ()> + Send;
+    fn wait_for_tasks(&self) -> impl Future<Output = Result<(), ClientError>> + Send;
 }

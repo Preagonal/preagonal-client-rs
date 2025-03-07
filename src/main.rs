@@ -1,24 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
 use config::{ClientConfig, ClientType};
-use discord::commands::{add_weapon, get_weapon, sendtorc};
-use net::{
-    client::{GClientTrait, game::GameClient, rc::RemoteControlClient},
-    packet::{
-        PacketId,
-        from_server::{FromServerPacketId, weapon_script::NpcWeaponScript},
-    },
-};
+use discord::PreagonalBotEventHandler;
+use net::client::{ClientError, GClientTrait, game::GameClient, rc::RemoteControlClient};
 
-use serenity::{
-    Client,
-    all::{
-        ChannelId, CreateAttachment, CreateInteractionResponse, CreateInteractionResponseFollowup,
-        CreateInteractionResponseMessage, CreateMessage, GuildId, Interaction, Ready,
-    },
-    async_trait,
-    prelude::*,
-};
+use serenity::{Client, prelude::*};
 
 /// The config module contains the configuration for the bot.
 pub mod config;
@@ -32,154 +18,6 @@ pub mod io;
 pub mod net;
 /// The utils module contains utility functions.
 pub mod utils;
-
-struct Handler {
-    rc_clients: Vec<Arc<RemoteControlClient>>,
-    game_clients: Vec<Arc<GameClient>>,
-    guild_id: GuildId,
-    channel_id: ChannelId,
-}
-
-#[async_trait]
-impl EventHandler for Handler {
-    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
-        if let Interaction::Command(command) = interaction {
-            // Defer the response
-            let err = command
-                .create_response(
-                    &ctx.http,
-                    CreateInteractionResponse::Defer(
-                        CreateInteractionResponseMessage::new()
-                            .content("Waiting for command completion..."),
-                    ),
-                )
-                .await;
-
-            if let Err(why) = err {
-                log::error!("Error creating interaction response: {:?}", why);
-                return;
-            }
-
-            let response = match command.data.name.as_str() {
-                "send_to_rc" => sendtorc::run(&command, self.rc_clients.clone()).await,
-                "get_weapon" => get_weapon::run(&command, self.rc_clients.clone()).await,
-                "add_weapon" => add_weapon::run(&command, self.rc_clients.clone()).await,
-                _ => {
-                    log::warn!("No command found: {}", command.data.name);
-                    Ok(CreateInteractionResponseFollowup::new()
-                        .content(format!("Command `{}` not found.", command.data.name)))
-                }
-            };
-
-            if let Err(why) = response {
-                log::error!("Error running command: {:?}", why);
-                command
-                    .create_followup(
-                        &ctx.http,
-                        CreateInteractionResponseFollowup::new()
-                            .content(format!("Error running command:\n```{:?}```", why)),
-                    )
-                    .await
-                    .expect("Error sending error response");
-                return;
-            }
-
-            if let Err(why) = command.create_followup(&ctx.http, response.unwrap()).await {
-                log::error!("Error creating interaction response: {:?}", why);
-            }
-        }
-    }
-
-    async fn ready(&self, ctx: Context, ready: Ready) {
-        log::info!("Discord client connected as {}", ready.user.name);
-
-        // Set available commands.
-        if let Err(why) = self
-            .guild_id
-            .set_commands(
-                &ctx.http,
-                vec![
-                    sendtorc::register(),
-                    get_weapon::register(),
-                    add_weapon::register(),
-                ],
-            )
-            .await
-        {
-            log::error!("Error setting Discord commands: {:?}", why);
-        } else {
-            log::info!("Successfully set Discord commands");
-        }
-
-        // Capture needed fields to avoid lifetime issues.
-        let channel_id = self.channel_id; // ChannelId is Copy.
-        let http = ctx.http.clone();
-
-        // register event handler for RcChat
-        for client in self.rc_clients.iter() {
-            let http = http.clone(); // Clone http for each iteration
-            client
-                .register_event_handler(
-                    PacketId::FromServer(FromServerPacketId::RcChat),
-                    move |event| {
-                        let channel_id = channel_id;
-                        let http = http.clone();
-                        async move {
-                            let chat_message = event
-                                .packet
-                                .data()
-                                .iter()
-                                .map(|&byte| byte as char)
-                                .collect::<String>();
-                            if let Err(why) = channel_id
-                                .send_message(&http, CreateMessage::new().content(chat_message))
-                                .await
-                            {
-                                log::error!("Error sending message: {:?}", why);
-                            }
-                        }
-                    },
-                )
-                .await;
-        }
-
-        // register event handler for NpcWeaponScript
-        for client in self.game_clients.iter() {
-            let http = http.clone(); // Clone http for each iteration
-            client
-                .register_event_handler(
-                    PacketId::FromServer(FromServerPacketId::NpcWeaponScript),
-                    move |event| {
-                        let channel_id = channel_id;
-                        let http = http.clone();
-                        async move {
-                            let packet = NpcWeaponScript::try_from(event.packet)
-                                .expect("Error parsing weapon script packet");
-                            log::info!("Received weapon script: {:?}", packet);
-
-                            // Upload the weapon script to Discord as an attachment.
-                            let script = packet.weapon_bytecode;
-                            let script_name = packet.script_name;
-                            let script_attachment = CreateMessage::new()
-                                .content(format!("Weapon script: **{}**", script_name))
-                                .add_file(CreateAttachment::bytes(
-                                    script,
-                                    format!("{}.gs2bc", script_name),
-                                ));
-
-                            // Create a message in the channel.
-                            if let Err(why) =
-                                channel_id.send_message(&http, script_attachment).await
-                            {
-                                log::error!("Error sending message: {:?}", why);
-                            }
-                        }
-                    },
-                )
-                .await;
-        }
-    }
-}
 
 #[tokio::main]
 async fn main() {
@@ -199,11 +37,11 @@ async fn main() {
         match server.client_type {
             ClientType::Game(_) => {
                 let client = create_game_client(server).await;
-                game_clients.push(client);
+                game_clients.push(client.expect("Error creating game client"));
             }
             ClientType::RemoteControl(_) => {
                 let rc = create_rc_client(server).await;
-                rc_clients.push(rc);
+                rc_clients.push(rc.expect("Error creating remote control client"));
             }
             ClientType::NpcControl(_) => {
                 log::warn!("Unsupported client type: NpcControl");
@@ -221,12 +59,12 @@ async fn main() {
     // Set up the Discord client with our custom event handler.
     let intents = GatewayIntents::GUILD_MESSAGES;
     let token = config.discord.token.clone();
-    let handler = Handler {
-        rc_clients: rc_clients.clone(),
-        game_clients: game_clients.clone(),
+    let handler = PreagonalBotEventHandler::new(
+        rc_clients.clone(),
+        game_clients.clone(),
         guild_id,
         channel_id,
-    };
+    );
 
     let mut client = Client::builder(token, intents)
         .event_handler(handler)
@@ -238,22 +76,14 @@ async fn main() {
         client.start().await.expect("Error running Discord client");
     });
 
-    // Now, wait on all clients to finish.
-    for client in rc_clients {
-        // TODO: This waits for each client to finish before moving on to the next one.
-        // We should wait for all clients to finish at the same time.
-        client.wait_for_tasks().await;
-    }
-
-    for client in game_clients {
-        // TODO: This waits for each client to finish before moving on to the next one.
-        // We should wait for all clients to finish at the same time.
-        client.wait_for_tasks().await;
+    // Now, sleep forever.
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
     }
 }
 
 /// Create a GameClient
-pub async fn create_game_client(client: &ClientConfig) -> Arc<GameClient> {
+pub async fn create_game_client(client: &ClientConfig) -> Result<Arc<GameClient>, ClientError> {
     let login = client.login.clone();
 
     log::info!(
@@ -263,17 +93,36 @@ pub async fn create_game_client(client: &ClientConfig) -> Arc<GameClient> {
         login.auth.account_name
     );
 
-    let client = GameClient::connect(client)
+    let client = GameClient::new(client)?;
+
+    client.connect().await.expect("Error connecting to server");
+
+    // Register a disconnect handler that automatically reconnects.
+    client
+        .register_disconnect_handler({
+            let client = Arc::clone(&client);
+            move || {
+                let client = Arc::clone(&client);
+                async move {
+                    log::warn!("Disconnected from server, reconnecting after 5 seconds...");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    client.connect().await.expect("Error reconnecting");
+                }
+            }
+        })
         .await
-        .expect("Error connecting to server");
+        .expect("Error registering disconnect handler");
 
     client.login().await.expect("Error logging in");
 
-    client
+    Ok(client)
 }
 
 /// Create a RemoteControlClient
-pub async fn create_rc_client(client: &ClientConfig) -> Arc<RemoteControlClient> {
+/// Create a RemoteControlClient
+pub async fn create_rc_client(
+    client: &ClientConfig,
+) -> Result<Arc<RemoteControlClient>, ClientError> {
     let login = client.login.clone();
 
     log::info!(
@@ -283,11 +132,40 @@ pub async fn create_rc_client(client: &ClientConfig) -> Arc<RemoteControlClient>
         login.auth.account_name
     );
 
-    let rc = RemoteControlClient::connect(client)
-        .await
-        .expect("Error connecting to server");
+    let rc = RemoteControlClient::new(client).await?;
+    rc.connect().await.expect("Error connecting to server");
+
+    rc.register_disconnect_handler({
+        let rc = Arc::clone(&rc);
+        move || {
+            let rc = Arc::clone(&rc);
+            async move {
+                log::warn!("Disconnected from server, reconnecting after 5 seconds...");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+
+                // Clear the internal client reference before reconnecting
+                {
+                    log::debug!("Attempting to clear client reference");
+                    let mut client_guard = rc.client.write().await;
+                    *client_guard = None;
+                    log::debug!("Cleared client reference");
+                }
+
+                // Now try to reconnect
+                match rc.connect().await {
+                    Ok(_) => match rc.login().await {
+                        Ok(_) => log::info!("Successfully reconnected and logged in"),
+                        Err(e) => log::error!("Failed to login after reconnect: {:?}", e),
+                    },
+                    Err(e) => log::error!("Failed to reconnect: {:?}", e),
+                }
+            }
+        }
+    })
+    .await
+    .expect("Error registering disconnect handler");
 
     rc.login().await.expect("Error logging in");
 
-    rc
+    Ok(rc)
 }
