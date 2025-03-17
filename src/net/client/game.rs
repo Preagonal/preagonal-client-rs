@@ -55,8 +55,8 @@ impl GameClient {
         let protocol = GProtocolEnum::V6(GProtocolV6::new(
             reader,
             write_half,
-            self.game_specific_config.header_format.clone(),
-            self.game_specific_config.encryption_keys.clone(),
+            &self.game_specific_config.header_format,
+            &self.game_specific_config.encryption_keys,
         ));
 
         let client = GClient::connect(&self.config, protocol).await?;

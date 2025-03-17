@@ -36,15 +36,15 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV6<R, W
     pub fn new(
         reader: R,
         writer: W,
-        header_format: GProtocolV6HeaderFormat,
-        encryption_keys: EncryptionKeys,
+        header_format: &GProtocolV6HeaderFormat,
+        encryption_keys: &EncryptionKeys,
     ) -> Self {
         Self {
             reader: Mutex::new(AsyncGraalReader::from_reader(reader)),
             writer: Mutex::new(AsyncGraalWriter::from_writer(writer)),
             packet_queue: Mutex::new(VecDeque::new()),
-            header_format,
-            encryption_keys,
+            header_format: header_format.clone(),
+            encryption_keys: encryption_keys.clone(),
             from_gserver_checksum: AtomicU8::new(1),
             to_client_checksum: AtomicU8::new(1),
             rc4_key: Mutex::new(None),

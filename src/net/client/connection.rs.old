@@ -1,0 +1,358 @@
+//! Connection management module
+//!
+//! This module provides a connection management layer to abstract
+//! connection handling from client implementations.
+
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite, BufReader};
+use tokio::net::TcpStream;
+use tokio::sync::{Mutex, RwLock};
+use tokio::time::timeout;
+
+use crate::config::ClientConfig;
+use crate::net::client::ClientError;
+use crate::net::protocol::{GProtocolEnum, Protocol};
+
+use super::gclient::GClient;
+
+/// Connection state
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionState {
+    /// The connection is disconnected
+    Disconnected,
+    /// The connection is connecting
+    Connecting,
+    /// The connection is connected
+    Connected,
+    /// The connection is reconnecting
+    Reconnecting,
+    /// The connection is in an error state
+    Error,
+}
+
+/// Represents a connection to a server
+pub struct Connection {
+    /// The protocol used by this connection, None when disconnected
+    client: RwLock<Option<Arc<GClient>>>,
+    /// The current state of the connection
+    state: RwLock<ConnectionState>,
+    /// The configuration for this connection
+    config: ClientConfig,
+    /// The last error encountered by this connection
+    last_error: RwLock<Option<ClientError>>,
+    /// Lock used when establishing a connection to prevent multiple simultaneous connect attempts
+    connect_lock: Mutex<()>,
+}
+
+impl Connection {
+    /// Create a new disconnected connection
+    pub fn new(config: ClientConfig) -> Self {
+        Self {
+            client: RwLock::new(None),
+            state: RwLock::new(ConnectionState::Disconnected),
+            config,
+            last_error: RwLock::new(None),
+            connect_lock: Mutex::new(()),
+        }
+    }
+
+    /// Set the client for this connection
+    pub async fn set_client(&self, client: Arc<GClient>) {
+        let mut client_guard = self.client.write().await;
+        *client_guard = Some(client);
+    }
+
+    /// Check if the connection has an active protocol
+    pub async fn has_client(&self) -> bool {
+        self.client.read().await.is_some()
+    }
+
+    /// Get the current state of the connection
+    pub async fn state(&self) -> ConnectionState {
+        *self.state.read().await
+    }
+
+    /// Set the last error encountered by this connection
+    pub async fn set_error(&self, error: ClientError) {
+        let mut last_error = self.last_error.write().await;
+        *last_error = Some(error);
+    }
+
+    /// Set the state of the connection
+    async fn set_state(&self, new_state: ConnectionState) {
+        let mut state = self.state.write().await;
+        *state = new_state;
+    }
+
+    /// Get the configuration for this connection
+    pub fn config(&self) -> &ClientConfig {
+        &self.config
+    }
+
+    /// Shut down this connection
+    pub async fn shutdown(&self) -> Result<(), ClientError> {
+        log::debug!("Shutting down connection");
+        // Set the state to disconnected first to prevent new operations
+        self.set_state(ConnectionState::Disconnected).await;
+        
+        // Shutdown the protocol if it exists
+        let mut client_guard = self.client.write().await;
+        if let Some(client) = &*client_guard {
+            let result = client.shutdown().await;
+            // Clear protocol regardless of shutdown result
+            *client_guard = None;
+            result?;
+        }
+        
+        Ok(())
+    }
+}
+
+/// A specialized implementation of Connection for TcpStream connections
+pub struct TcpConnection {
+    /// The wrapped connection
+    inner: Connection<BufReader<tokio::net::tcp::OwnedReadHalf>, tokio::net::tcp::OwnedWriteHalf>,
+    /// Connection settings
+    settings: ConnectionSettings,
+}
+
+/// Settings for connection attempts
+pub struct ConnectionSettings {
+    /// Connection timeout
+    pub connect_timeout: Duration,
+    /// Reconnection timeout
+    pub reconnect_timeout: Duration,
+    /// Maximum reconnection attempts before giving up
+    pub max_reconnect_attempts: usize,
+    /// Base delay between reconnection attempts
+    pub reconnect_base_delay: Duration,
+    /// Maximum delay between reconnection attempts (for exponential backoff)
+    pub reconnect_max_delay: Duration,
+}
+
+impl Default for ConnectionSettings {
+    fn default() -> Self {
+        Self {
+            connect_timeout: Duration::from_secs(10),
+            reconnect_timeout: Duration::from_secs(10),
+            max_reconnect_attempts: 5,
+            reconnect_base_delay: Duration::from_secs(1),
+            reconnect_max_delay: Duration::from_secs(30),
+        }
+    }
+}
+
+impl TcpConnection {
+    /// Create a new TcpConnection with default settings
+    pub fn new(config: ClientConfig, settings: Option<ConnectionSettings>) -> Self {
+        Self {
+            inner: Connection::new(config),
+            settings: settings.unwrap_or_default(),
+        }
+    }
+
+    /// Connect to the server
+    pub async fn connect(&self) -> Result<(), ClientError> {
+        // Acquire connect lock to prevent multiple concurrent connection attempts
+        let _lock = self.inner.connect_lock.lock().await;
+        
+        // Check if already connected
+        let current_state = self.inner.state().await;
+        if current_state == ConnectionState::Connected {
+            return Ok(());
+        }
+        
+        // Set state to connecting
+        self.inner.set_state(ConnectionState::Connecting).await;
+        
+        // Get connection info
+        let host = &self.inner.config().host;
+        let port = &self.inner.config().port;
+        let addr = format!("{}:{}", host, port);
+        
+        log::debug!("Connecting to {}:{}", host, port);
+        
+        // Connect with timeout
+        let connect_result = match timeout(
+            self.settings.connect_timeout,
+            TcpStream::connect(&addr)
+        ).await {
+            Ok(result) => result,
+            Err(_) => {
+                log::error!("Connection timeout after {:?}", self.settings.connect_timeout);
+                self.inner.set_state(ConnectionState::Error).await;
+                self.inner.set_error(ClientError::Other("Connection timeout".to_string())).await;
+                return Err(ClientError::Other("Connection timeout".to_string()));
+            }
+        };
+        
+        // Process stream result
+        match connect_result {
+            Ok(stream) => {
+                log::debug!("Connected to server");
+                let (read_half, write_half) = stream.into_split();
+                let reader = BufReader::new(read_half);
+                
+                // Create protocol based on configuration
+                let protocol = self.create_protocol_from_config(reader, write_half);
+                
+                // Set the protocol and update state
+                self.inner.set_protocol(protocol).await;
+                self.inner.set_state(ConnectionState::Connected).await;
+                
+                Ok(())
+            },
+            Err(e) => {
+                log::error!("Failed to connect: {}", e);
+                self.inner.set_state(ConnectionState::Error).await;
+                Err(ClientError::Tcp(e))
+            }
+        }
+    }
+
+    /// Create protocol instance based on configuration
+    fn create_protocol_from_config(
+        &self,
+        reader: BufReader<tokio::net::tcp::OwnedReadHalf>,
+        writer: tokio::net::tcp::OwnedWriteHalf,
+    ) -> GProtocolEnum<BufReader<tokio::net::tcp::OwnedReadHalf>, tokio::net::tcp::OwnedWriteHalf> {
+        // Determine protocol version from client config
+        use crate::config::ClientType;
+        let protocol = match &self.inner.config().client_type {
+            ClientType::Game(g) => {
+                GProtocolEnum::V6(crate::net::protocol::proto_v6::GProtocolV6::new(reader, writer, &g.header_format, &g.encryption_keys))
+            },
+            ClientType::RemoteControl(_) => {
+                GProtocolEnum::V5(crate::net::protocol::proto_v5::GProtocolV5::new(reader, writer))
+            },
+            ClientType::NpcControl(_) => {
+                GProtocolEnum::V4(crate::net::protocol::proto_v4::GProtocolV4::new(reader, writer))
+            },
+        };
+        
+        protocol
+    }
+
+    /// Attempt to reconnect
+    pub async fn reconnect(&self) -> Result<(), ClientError> {
+        // Acquire connect lock to prevent multiple concurrent connection attempts
+        let _lock = self.inner.connect_lock.lock().await;
+        
+        // Update state
+        self.inner.set_state(ConnectionState::Reconnecting).await;
+        
+        // Ensure old connection is shut down
+        let _ = self.inner.shutdown().await;
+        
+        // Implement exponential backoff reconnection
+        let mut attempts = 0;
+        let max_attempts = self.settings.max_reconnect_attempts;
+        let mut delay = self.settings.reconnect_base_delay;
+        
+        while attempts < max_attempts {
+            log::info!("Reconnection attempt {}/{}", attempts + 1, max_attempts);
+            
+            // Wait before retrying
+            if attempts > 0 {
+                tokio::time::sleep(delay).await;
+                // Apply exponential backoff with capping
+                delay = std::cmp::min(
+                    delay.mul_f32(1.5), 
+                    self.settings.reconnect_max_delay
+                );
+            }
+            
+            // Try to connect with timeout
+            let connect_result = timeout(
+                self.settings.reconnect_timeout,
+                self.connect()
+            ).await;
+            
+            match connect_result {
+                Ok(Ok(_)) => {
+                    log::info!("Successfully reconnected");
+                    return Ok(());
+                },
+                Ok(Err(e)) => {
+                    log::warn!("Reconnection attempt failed: {:?}", e);
+                    attempts += 1;
+                },
+                Err(_) => {
+                    log::warn!("Reconnection attempt timed out");
+                    attempts += 1;
+                },
+            }
+        }
+        
+        // All attempts failed
+        log::error!("Failed to reconnect after {} attempts", max_attempts);
+        self.inner.set_state(ConnectionState::Error).await;
+        self.inner.set_error(ClientError::Other(format!("Failed to reconnect after {} attempts", max_attempts))).await;
+        
+        Err(ClientError::Other(format!("Failed to reconnect after {} attempts", max_attempts)))
+    }
+
+    /// Get the underlying connection
+    pub fn inner(&self) -> &Connection<BufReader<tokio::net::tcp::OwnedReadHalf>, tokio::net::tcp::OwnedWriteHalf> {
+        &self.inner
+    }
+
+    /// Shutdown the connection
+    pub async fn shutdown(&self) -> Result<(), ClientError> {
+        self.inner.shutdown().await
+    }
+}
+
+/// A connection manager that handles connection pooling and reconnection
+pub struct ConnectionManager {
+    /// Managed connections
+    connections: RwLock<Vec<Arc<TcpConnection>>>,
+}
+
+impl ConnectionManager {
+    /// Create a new connection manager
+    pub fn new() -> Self {
+        Self {
+            connections: RwLock::new(Vec::new()),
+        }
+    }
+
+    /// Create a new connection
+    pub async fn create_connection(
+        &self,
+        config: ClientConfig,
+        settings: Option<ConnectionSettings>,
+    ) -> Arc<TcpConnection> {
+        let connection = Arc::new(TcpConnection::new(config, settings));
+        
+        // Add to managed connections
+        let mut connections = self.connections.write().await;
+        connections.push(Arc::clone(&connection));
+        
+        connection
+    }
+
+    /// Get all managed connections
+    pub async fn get_connections(&self) -> Vec<Arc<TcpConnection>> {
+        let connections = self.connections.read().await;
+        connections.clone()
+    }
+
+    /// Shutdown all connections
+    pub async fn shutdown_all(&self) -> Result<(), ClientError> {
+        let connections = self.connections.read().await;
+        for connection in connections.iter() {
+            if let Err(e) = connection.shutdown().await {
+                log::error!("Error shutting down connection: {:?}", e);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for ConnectionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}

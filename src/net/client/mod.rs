@@ -16,6 +16,8 @@ pub mod gclient;
 pub mod nc;
 /// This module defines the RemoteControl.
 pub mod rc;
+// /// This module defines the connection
+// pub mod connection;
 
 use super::packet::{
     PacketConversionError, PacketEvent, PacketId, from_server::FromServerPacketId,
