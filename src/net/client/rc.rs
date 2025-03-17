@@ -1,7 +1,7 @@
 use std::sync::{Arc, Weak};
 
 use tokio::{
-    io::BufReader,
+    io::{AsyncWriteExt, BufReader},
     net::TcpStream,
     sync::{Mutex, RwLock},
     task::JoinHandle,
@@ -110,11 +110,14 @@ impl RemoteControlClient {
         let host = &self.config.host;
         let port = &self.config.port;
         let addr = format!("{}:{}", host, port);
+        log::debug!("Attempting to connect to address: {}", addr);
         let stream = TcpStream::connect(&addr).await?;
+        log::debug!("Connected to server");
         let (read_half, write_half) = stream.into_split();
         let reader = BufReader::new(read_half);
 
         let protocol = GProtocolEnum::V5(GProtocolV5::new(reader, write_half));
+        log::debug!("Creating GClient");
         let client = GClient::connect(&self.config, protocol).await?;
 
         log::debug!("Locking on client write lock");

@@ -138,6 +138,12 @@ impl<W: AsyncWrite + Unpin> AsyncGraalWriter<W> {
         Ok(())
     }
 
+    /// Shutdown the writer.
+    pub async fn shutdown(&mut self) -> Result<(), GraalIoError> {
+        self.inner.shutdown().await?;
+        Ok(())
+    }
+
     /// Flushes the writer.
     pub async fn flush(&mut self) -> Result<(), GraalIoError> {
         self.inner.flush().await?;

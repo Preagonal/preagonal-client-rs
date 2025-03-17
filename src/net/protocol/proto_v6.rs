@@ -297,6 +297,14 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> crate::net::prot
         }
     }
 
+    async fn shutdown(
+        &self
+    ) -> Result<(), ProtocolError> {
+        let mut writer = self.writer.lock().await;
+        writer.shutdown().await?;
+        Ok(())
+    }
+
     async fn write(&self, packet: &(dyn GPacket + Send)) -> Result<(), ProtocolError> {
         self.send_packet(packet).await
     }

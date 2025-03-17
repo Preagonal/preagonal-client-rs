@@ -82,6 +82,14 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> GProtocolV4<R, W
         Ok(compressed_payload)
     }
 
+    /// Shutdown the protocol.
+    pub async fn shutdown(&self) -> Result<(), ProtocolError> {
+        // Lock only the writer for sending.
+        let mut writer = self.writer.lock().await;
+        writer.shutdown().await?;
+        Ok(())
+    }
+
     /// Send a packet by writing its data (with header, compression, and encryption)
     /// to the output stream.
     pub async fn send_packet(&self, packet: &dyn GPacket) -> Result<(), ProtocolError> {
@@ -132,6 +140,11 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GPr
     /// Write a packet.
     async fn write(&self, packet: &(dyn GPacket + Send)) -> Result<(), ProtocolError> {
         self.send_packet(packet).await
+    }
+
+    /// Write a packet.
+    async fn shutdown(&self) -> Result<(), ProtocolError> {
+        self.shutdown().await
     }
 
     /// Return the protocol version.

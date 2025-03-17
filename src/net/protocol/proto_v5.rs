@@ -266,6 +266,12 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GPr
         self.send_packet(packet).await
     }
 
+    async fn shutdown(&self) -> Result<(), ProtocolError> {
+        let mut writer = self.writer.lock().await;
+        writer.shutdown().await?;
+        Ok(())
+    }
+
     fn version(&self) -> u8 {
         5
     }

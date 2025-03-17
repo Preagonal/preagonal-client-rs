@@ -141,7 +141,6 @@ pub async fn create_rc_client(
             let rc = Arc::clone(&rc);
             async move {
                 log::warn!("Disconnected from server, reconnecting after 5 seconds...");
-                tokio::time::sleep(Duration::from_secs(5)).await;
 
                 // Clear the internal client reference before reconnecting
                 {

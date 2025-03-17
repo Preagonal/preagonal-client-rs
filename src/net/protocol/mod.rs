@@ -75,11 +75,18 @@ pub trait Protocol {
     fn read(
         &self,
     ) -> impl std::future::Future<Output = Result<Arc<dyn GPacket>, ProtocolError>> + Send;
+
     /// Write a packet to the protocol.
     fn write(
         &self,
         packet: &(dyn GPacket + Send),
     ) -> impl std::future::Future<Output = Result<(), ProtocolError>> + Send;
+
+    /// Shutdown the protocol
+    fn shutdown(
+        &self
+    ) -> impl std::future::Future<Output = Result<(), ProtocolError>> + Send;
+
     /// Get the protocol version.
     fn version(&self) -> u8;
 }
@@ -108,6 +115,16 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GPr
             GProtocolEnum::V4(proto) => proto.write(packet).await,
             GProtocolEnum::V5(proto) => proto.write(packet).await,
             GProtocolEnum::V6(proto) => proto.write(packet).await,
+        }
+    }
+
+    async fn shutdown(
+            &self
+        ) -> Result<(), ProtocolError> {
+        match self {
+            GProtocolEnum::V4(proto) => proto.shutdown().await,
+            GProtocolEnum::V5(proto) => proto.shutdown().await,
+            GProtocolEnum::V6(proto) => proto.shutdown().await,
         }
     }
 

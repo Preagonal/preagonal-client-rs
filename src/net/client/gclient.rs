@@ -64,7 +64,6 @@ impl GClient {
         protocol: GProtocolEnum<BufReader<OwnedReadHalf>, OwnedWriteHalf>,
     ) -> Result<Arc<Self>, ClientError> {
         let protocol = Arc::new(protocol);
-
         let pending_requests = Arc::new(Mutex::new(HashMap::new()));
         let event_handlers = Arc::new(Mutex::new(HashMap::new()));
         let shutdown = Arc::new(Notify::new());
@@ -196,6 +195,11 @@ impl GClient {
         }
 
         log::debug!("Handling disconnect (reason: {})", reason);
+
+        // Disconnect the protocol
+        if let Err(e) = self.protocol.shutdown().await {
+            log::error!("Error during protocol shutdown: {:?}", e);
+        }
 
         // Mark as disconnected first to prevent re-entry
         *is_disconnected = true;
