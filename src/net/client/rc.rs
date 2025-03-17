@@ -1,7 +1,7 @@
 use std::sync::{Arc, Weak};
 
 use tokio::{
-    io::{AsyncWriteExt, BufReader},
+    io::BufReader,
     net::TcpStream,
     sync::{Mutex, RwLock},
     task::JoinHandle,

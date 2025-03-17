@@ -83,9 +83,7 @@ pub trait Protocol {
     ) -> impl std::future::Future<Output = Result<(), ProtocolError>> + Send;
 
     /// Shutdown the protocol
-    fn shutdown(
-        &self
-    ) -> impl std::future::Future<Output = Result<(), ProtocolError>> + Send;
+    fn shutdown(&self) -> impl std::future::Future<Output = Result<(), ProtocolError>> + Send;
 
     /// Get the protocol version.
     fn version(&self) -> u8;
@@ -118,9 +116,7 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Protocol for GPr
         }
     }
 
-    async fn shutdown(
-            &self
-        ) -> Result<(), ProtocolError> {
+    async fn shutdown(&self) -> Result<(), ProtocolError> {
         match self {
             GProtocolEnum::V4(proto) => proto.shutdown().await,
             GProtocolEnum::V5(proto) => proto.shutdown().await,
